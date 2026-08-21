@@ -24,6 +24,7 @@ return [
     'netTablesNodesTitle' => 'DB-sync activity by node',
     'netTablesCommands' => 'Commands',
     'netNodeTreeTitle' => 'Nodes',
+    'nodeStatusTitle' => 'Node status',
     'netTreeFiles' => 'Files synced',
     'netTreeSize' => 'Size',
     'netTreeTraffic' => 'Last transfer',

@@ -68,14 +68,18 @@ class Dashboard extends BaseController
         $network = $cluster->networkSummary();
         $files   = $cluster->dashboardSummary();
         $db      = $cluster->dbSyncDashboardSummary();
+        $health  = $this->nodeHealth(array_keys($network['nodes']));
 
-        foreach ($network['nodes'] as &$node) {
+        foreach ($network['nodes'] as $name => &$node) {
             $node['avgSpeedHuman']         = $this->humanSize((int) round($node['avgSpeedBps'])) . '/s';
             $node['totalBytesHuman']       = $this->humanSize($node['totalBytes']);
             $node['lastTransferBytesHuman'] = $this->humanSize($node['lastTransferBytes']);
             $node['lastSyncAgo']           = $this->timeAgo($node['lastSyncAt']);
             $node['lastPushInAgo']         = $this->timeAgo($node['lastPushInAt']);
             $node['lastPullAgo']           = $this->timeAgo($node['lastPullAt']);
+            $node['sshOk']                 = $health[$name]['sshOk'];
+            $node['dbSyncOk']              = $health[$name]['dbSyncOk'];
+            $node['queueFailed']           = $health[$name]['queueFailed'];
         }
         unset($node);
 
@@ -95,6 +99,83 @@ class Dashboard extends BaseController
             'dbRecentErrors'      => $db['recentErrors'],
             'sessionWouldSurvive' => $this->sessionWouldSurvive(),
         ];
+    }
+
+    // Per-peer health signal for the Dashboard's node-status LED card,
+    // combining THREE sources beyond the file-sync ok/error networkSummary()
+    // already carries - each one catches a failure mode the others miss:
+    // - SSH reachability (writable/Cluster/ssh_connections.json via
+    //   SshConnectivityLog) - the standing login-and-exec check (SshChecker),
+    //   not file-sync's own push/pull attempts, so a node that's simply
+    //   unreachable shows red even between sync attempts.
+    // - DB sync (writable/Cluster/db_sync_log.json via DbSyncLog) - a node
+    //   can have healthy file sync while its DB sync keeps failing (bad
+    //   credentials, a locked table), same direction-aware "most recent
+    //   attempt wins" rule dbSyncDashboardSummary() already uses (push-out
+    //   for a public peer, pull for a NAT one - iterating oldest-first means
+    //   a plain overwrite leaves the latest entry once the loop ends).
+    // - Queue job failures (the 'cluster' DB group's own queue_jobs_failed
+    //   table - literally writable/Cluster/cluster.db, not a JSON log) -
+    //   PushFileJob's own payload carries the target peer under
+    //   data.peer, so a stuck/failing outbound job shows up here even
+    //   before it ever reaches a file-sync log entry.
+    // Best-effort throughout - a broken/unreachable 'cluster' DB connection
+    // must not take the whole Dashboard down with it (see the try/catch
+    // below); every source defaults to "no data" (null/0) rather than
+    // throwing when unavailable, same convention the JSON-log classes
+    // themselves already use for a missing file.
+    //
+    // @param list<string> $peerNames
+    //
+    // @return array<string, array{sshOk: bool|null, dbSyncOk: bool|null, queueFailed: int}>
+    private function nodeHealth(array $peerNames): array
+    {
+        $ssh = class_exists(\AdGo\Cluster\SshConnectivityLog::class)
+            ? (new \AdGo\Cluster\SshConnectivityLog())->all()
+            : [];
+
+        $dbSyncOkByPeer = [];
+        if (class_exists(\AdGo\Cluster\DbSyncLog::class)) {
+            foreach ((new \AdGo\Cluster\DbSyncLog())->all() as $entry) {
+                $peer = (string) ($entry['peer'] ?? '');
+                if ($peer === '' || ! in_array($entry['direction'] ?? '', ['push-out', 'pull'], true)) {
+                    continue;
+                }
+                // Oldest-first log, same as dbSyncDashboardSummary()'s own
+                // comment - a plain overwrite while iterating in order
+                // naturally leaves the MOST RECENT attempt per peer.
+                $dbSyncOkByPeer[$peer] = (bool) ($entry['ok'] ?? false);
+            }
+        }
+
+        $queueFailedByPeer = [];
+        try {
+            $db = \Config\Database::connect('cluster');
+            if ($db->tableExists('queue_jobs_failed')) {
+                foreach ($db->table('queue_jobs_failed')->select('payload')->get()->getResultArray() as $row) {
+                    $decoded = json_decode((string) $row['payload'], true);
+                    $peer    = (string) ($decoded['data']['peer'] ?? '');
+                    if ($peer !== '') {
+                        $queueFailedByPeer[$peer] = ($queueFailedByPeer[$peer] ?? 0) + 1;
+                    }
+                }
+            }
+        } catch (\Throwable $e) {
+            // 'cluster' DB group unreachable/misconfigured - queue health
+            // just stays unknown (0) for every peer rather than 500ing the
+            // whole Dashboard over a side signal.
+        }
+
+        $health = [];
+        foreach ($peerNames as $name) {
+            $health[$name] = [
+                'sshOk'       => $ssh[$name]['ok'] ?? null,
+                'dbSyncOk'    => $dbSyncOkByPeer[$name] ?? null,
+                'queueFailed' => $queueFailedByPeer[$name] ?? 0,
+            ];
+        }
+
+        return $health;
     }
 
     // Rendered once on page load, deliberately NOT part of networkStatus()'s

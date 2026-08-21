@@ -24,6 +24,7 @@ return [
     'netTablesNodesTitle' => 'Activitate DB-sync pe noduri',
     'netTablesCommands' => 'Comenzi',
     'netNodeTreeTitle' => 'Noduri',
+    'nodeStatusTitle' => 'Stare noduri',
     'netTreeFiles' => 'Fișiere sincronizate',
     'netTreeSize' => 'Mărime',
     'netTreeTraffic' => 'Ultimul transfer',
