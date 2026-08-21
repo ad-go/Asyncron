@@ -20,7 +20,7 @@
                     <div class="col-6 col-md-3 mb-2"><label class="form-label"><?= lang('App.themeColor') ?></label>
                         <select class="form-select form-select-sm" data-field="themeColor">
                             <?php foreach (\App\Controllers\SettingsController::THEME_COLORS as $color) : ?>
-                                <option value="<?= esc($color) ?>" <?= ($siteThemeColor ?? 'blue') === $color ? 'selected' : '' ?>><?= esc(ucfirst($color)) ?></option>
+                                <option value="<?= esc($color) ?>" <?= ($siteThemeColor ?? 'blue') === $color ? 'selected' : '' ?>><?= lang('App.color' . ucfirst($color)) ?></option>
                             <?php endforeach ?>
                         </select></div>
                     <div class="col-6 col-md-3 mb-2">
