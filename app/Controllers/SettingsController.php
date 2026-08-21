@@ -458,14 +458,14 @@ class SettingsController extends BaseController
         $params['kind'] = $kind;
 
         if ($node === $cluster->thisNodeName()) {
-            $result = $this->runLocalTest($kind, $params);
+            $result = $this->localizeTestResult($this->runLocalTest($kind, $params));
 
             return $this->response->setJSON($result + ['csrf' => $this->csrfPayload()]);
         }
 
         $target = $cluster->node($node);
         if (($target['type'] ?? '') === 'public') {
-            $result = $this->callRemoteTest($cluster, (string) $target['baseURL'], $params);
+            $result = $this->localizeTestResult($this->callRemoteTest($cluster, (string) $target['baseURL'], $params));
 
             return $this->response->setJSON($result + ['csrf' => $this->csrfPayload()]);
         }
@@ -542,7 +542,33 @@ class SettingsController extends BaseController
             return $this->response->setJSON(['pending' => true]);
         }
 
-        return $this->response->setJSON($result + ['csrf' => $this->csrfPayload()]);
+        return $this->response->setJSON($this->localizeTestResult($result) + ['csrf' => $this->csrfPayload()]);
+    }
+
+    // Translates the 'errorCode' (+ optional 'errorArgs') NodeConnectionChecker/
+    // DbConnectionChecker/CapabilityChecker attach onto a KNOWN, fixed-message
+    // failure into this admin's own active locale, overwriting the plain-English
+    // 'error' string those classes return - see NodeConnectionChecker::
+    // checkParams()'s own docblock for why that translation can't happen there
+    // (this package ships no Language files, and a remote/NAT check's result
+    // crosses the wire from a DIFFERENT node's PHP process that has no idea
+    // what locale the requesting admin even has active). A caught Throwable's
+    // own ->getMessage() (no 'errorCode' set) is left exactly as returned -
+    // driver/library text, not practical to translate. Handles both a flat
+    // result and 'combined' testNode()'s own nested 'node'/'database' shape.
+    private function localizeTestResult(array $result): array
+    {
+        foreach (['node', 'database'] as $key) {
+            if (isset($result[$key]) && is_array($result[$key])) {
+                $result[$key] = $this->localizeTestResult($result[$key]);
+            }
+        }
+        if (isset($result['errorCode']) && is_string($result['errorCode'])) {
+            $args            = is_array($result['errorArgs'] ?? null) ? $result['errorArgs'] : [];
+            $result['error'] = lang('App.connErr' . ucfirst($result['errorCode']), $args);
+        }
+
+        return $result;
     }
 
     // Export button on the Cluster card - dumps nodeRows()/databaseRows()

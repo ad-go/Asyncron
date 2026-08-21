@@ -38,7 +38,7 @@ use Throwable;
 class NodeConnectionChecker
 {
     /**
-     * @return array{ok: bool, protocol?: string, detail?: string, error?: string, ms: float}
+     * @return array{ok: bool, protocol?: string, detail?: string, error?: string, errorCode?: string, errorArgs?: array<int, scalar>, ms: float}
      */
     public function checkNode(string $node, ?Settings $settings = null): array
     {
@@ -56,9 +56,25 @@ class NodeConnectionChecker
     }
 
     /**
+     * 'error' is always plain English - this package ships no Language
+     * files of its own (see NodeConnectionChecker's own class docblock
+     * and SsoController::handoffFailedMessage() for the same reasoning),
+     * and a remote/NAT check's result crosses the wire from a DIFFERENT
+     * node's PHP process, which has no idea what locale the requesting
+     * admin's browser session is even in. 'errorCode' is set alongside
+     * it for every KNOWN, fixed-message failure (never for a caught
+     * Throwable's own ->getMessage(), which is inherently
+     * driver/library-specific and not practical to translate) - the
+     * app/ layer (cluster-ui's own SettingsController) is the one place
+     * that both owns Language files AND knows the viewer's locale, so
+     * it looks up 'errorCode' there and re-translates 'error' just
+     * before the JSON response reaches the browser, regardless of which
+     * node actually ran the check. 'errorArgs' carries the {0}-style
+     * placeholder value(s) a code needs (e.g. execFailed's exit status).
+     *
      * @param array{protocol?: string, host?: string, port?: string|int, user?: string, pass?: string} $params
      *
-     * @return array{ok: bool, protocol?: string, detail?: string, error?: string, ms: float}
+     * @return array{ok: bool, protocol?: string, detail?: string, error?: string, errorCode?: string, errorArgs?: array<int, scalar>, ms: float}
      */
     public function checkParams(array $params): array
     {
@@ -76,7 +92,7 @@ class NodeConnectionChecker
     {
         $host = trim((string) ($params['host'] ?? ''));
         if ($host === '') {
-            return ['ok' => false, 'error' => 'No SSH host configured for this node.', 'ms' => 0.0];
+            return ['ok' => false, 'error' => 'No SSH host configured for this node.', 'errorCode' => 'noSshHost', 'ms' => 0.0];
         }
         $port = (int) ($params['port'] ?: 22);
         $user = (string) ($params['user'] ?? '');
@@ -87,7 +103,7 @@ class NodeConnectionChecker
             $ssh      = new SSH2($host, $port, 10);
             $loggedIn = $ssh->login($user, $pass);
             if (! $loggedIn) {
-                return ['ok' => false, 'error' => 'Authentication failed.', 'ms' => $this->msSince($start)];
+                return ['ok' => false, 'error' => 'Authentication failed.', 'errorCode' => 'authFailed', 'ms' => $this->msSince($start)];
             }
 
             // Cheap, side-effect-free - same proof-of-usability SshChecker
@@ -98,7 +114,7 @@ class NodeConnectionChecker
             $ssh->disconnect();
 
             if ($exitStatus !== 0) {
-                return ['ok' => false, 'error' => "Login succeeded but exec failed (exit $exitStatus).", 'ms' => $this->msSince($start)];
+                return ['ok' => false, 'error' => "Login succeeded but exec failed (exit $exitStatus).", 'errorCode' => 'execFailed', 'errorArgs' => [$exitStatus], 'ms' => $this->msSince($start)];
             }
 
             return ['ok' => true, 'protocol' => $protocol, 'detail' => "$user@$host:$port", 'ms' => $this->msSince($start)];
@@ -114,7 +130,7 @@ class NodeConnectionChecker
     {
         $host = trim((string) ($params['host'] ?? ''));
         if ($host === '') {
-            return ['ok' => false, 'error' => 'No FTP host configured for this node.', 'ms' => 0.0];
+            return ['ok' => false, 'error' => 'No FTP host configured for this node.', 'errorCode' => 'noFtpHost', 'ms' => 0.0];
         }
         $port = (int) ($params['port'] ?: 21);
         $user = (string) ($params['user'] ?? '');
@@ -126,7 +142,7 @@ class NodeConnectionChecker
         // shared hosting box beyond core PHP extensions. Not every build
         // has ext-ftp enabled, so this is checked, not assumed.
         if (! function_exists('ftp_connect')) {
-            return ['ok' => false, 'error' => 'PHP ext-ftp is not available on this node.', 'ms' => 0.0];
+            return ['ok' => false, 'error' => 'PHP ext-ftp is not available on this node.', 'errorCode' => 'noFtpExt', 'ms' => 0.0];
         }
 
         $start  = microtime(true);
@@ -136,14 +152,14 @@ class NodeConnectionChecker
         // signal, same shape as every native ftp_* call below.
         $conn = $useTls ? @ftp_ssl_connect($host, $port, 10) : @ftp_connect($host, $port, 10);
         if ($conn === false) {
-            return ['ok' => false, 'error' => 'Could not connect to the FTP host.', 'ms' => $this->msSince($start)];
+            return ['ok' => false, 'error' => 'Could not connect to the FTP host.', 'errorCode' => 'ftpConnectFailed', 'ms' => $this->msSince($start)];
         }
 
         $loggedIn = @ftp_login($conn, $user, $pass);
         if (! $loggedIn) {
             @ftp_close($conn);
 
-            return ['ok' => false, 'error' => 'FTP authentication failed.', 'ms' => $this->msSince($start)];
+            return ['ok' => false, 'error' => 'FTP authentication failed.', 'errorCode' => 'ftpAuthFailed', 'ms' => $this->msSince($start)];
         }
 
         // Proof-of-usability, same idea as SSH's 'true' exec above - a
@@ -158,7 +174,7 @@ class NodeConnectionChecker
         @ftp_close($conn);
 
         if ($pwd === false) {
-            return ['ok' => false, 'error' => 'Login succeeded but PWD failed.', 'ms' => $this->msSince($start)];
+            return ['ok' => false, 'error' => 'Login succeeded but PWD failed.', 'errorCode' => 'ftpPwdFailed', 'ms' => $this->msSince($start)];
         }
 
         return ['ok' => true, 'protocol' => $protocol, 'detail' => $pwd, 'ms' => $this->msSince($start)];
