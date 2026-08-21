@@ -302,4 +302,18 @@
     });
 
     load();
+    // Extends the SAME load() every create/update/delete/ban/unban above
+    // already calls to refresh itself - one more caller, not a second copy
+    // of the fetch-and-render logic. Same 5s cadence as the Settings page's
+    // own live poll (SettingsController::nodeStatus() +
+    // public/assets/settings-node-status.js). A full-body replace is safe
+    // here (unlike that page's own in-place field updates): this table has
+    // no inline-editable inputs of its own - editing happens in the
+    // separate #user-modal, whose own fields are untouched by render()
+    // rebuilding #users-table-body underneath it, open or not. Keeps a
+    // user's row current when another admin (or a DB-synced change
+    // arriving from a peer - Shield's own auth tables are always part of
+    // this app's replicated set, see README "How it works") adds, edits,
+    // bans, or removes an account from a different session.
+    setInterval(load, 5000);
 })();

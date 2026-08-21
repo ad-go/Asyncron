@@ -50,16 +50,17 @@
     <!-- One tricolor LED per peer (green/red/gray) - see
          Cluster::peerHealthStatuses()'s own docblock for the composite
          signal behind each color. Rendered here for the first load only;
-         settings-node-status.js polls SettingsController::nodeStatus()
-         every 5s to keep it live from then on, same "read the initial
-         payload straight from a data-* attribute, then take over via
-         polling" split the Dashboard's own node/network widgets use. -->
+         settings-node-status.js (data-status-url lives on #settings-cluster
+         below, not here - that table is what needs a status URL even when
+         there are zero peers yet, i.e. no LED card at all) polls
+         SettingsController::nodeStatus() every 5s to keep both this list
+         AND the Cluster table's own field values live from then on. -->
     <div class="col-12 col-lg-4">
         <div class="card card-sm">
             <div class="card-header">
                 <h3 class="card-title mb-0"><?= lang('App.nodeStatusTitle') ?></h3>
             </div>
-            <div class="card-body" id="node-status-list" data-status-url="<?= url_to('SettingsController::nodeStatus') ?>">
+            <div class="card-body" id="node-status-list">
                 <?php foreach ($nodeHealth as $peerName => $status) : ?>
                     <div class="d-flex align-items-center gap-2 py-1">
                         <span class="legend-dot" data-led="<?= esc($peerName) ?>" style="background:var(--node-led-<?= esc($status) ?>)"></span>
@@ -157,6 +158,7 @@
                        data-database-endpoint="<?= url_to('SettingsController::updateDatabase') ?>"
                        data-node-test-endpoint="<?= url_to('SettingsController::testNode') ?>"
                        data-delete-endpoint="<?= url_to('SettingsController::deleteNode') ?>"
+                       data-status-url="<?= url_to('SettingsController::nodeStatus') ?>"
                        data-test-strings="<?= esc(json_encode(['ok' => lang('App.connTestOk'), 'failed' => lang('App.connTestFailed'), 'waitingNat' => lang('App.connTestWaitingNat'), 'waitingUnknown' => lang('App.connTestWaitingUnknown'), 'timeout' => lang('App.connTestTimeout')]), 'attr') ?>">
                     <thead>
                         <tr>
@@ -464,7 +466,7 @@
 </div>
 <?php endif ?>
 <script src="<?= base_url('assets/settings.js') ?>" defer></script>
-<?php if ($nodeHealth !== []) : ?>
+<?php if ($nodes !== []) : ?>
 <script src="<?= base_url('assets/settings-node-status.js') ?>" defer></script>
 <?php endif ?>
 <?= $this->endSection() ?>

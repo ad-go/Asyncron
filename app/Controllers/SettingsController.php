@@ -143,11 +143,20 @@ class SettingsController extends BaseController
         ] + $this->layoutData());
     }
 
-    // Polled by public/assets/settings-node-status.js every 5s so the
-    // node-status LED card updates live - same data index() already
-    // renders server-side on first load, re-served as JSON. Gated the same
-    // way every other Settings endpoint is - reachable directly by URL,
-    // not just via this page, so it needs its own check.
+    // Polled by public/assets/settings-node-status.js every 5s so BOTH the
+    // node-status LED card AND the Cluster table's own field values update
+    // live - without this, another admin's edit (or a DB-synced change
+    // arriving from a peer - Nodes.*/Databases.* are themselves part of
+    // $dbSyncGroup, same table sync everything else in "How it works"
+    // rides) sits invisible in THIS browser tab until a manual reload.
+    // 'nodes' (LED statuses) and 'rows' (mergedNodeRows()) are the exact
+    // same data index() already renders server-side on first load, just
+    // re-served as JSON - same "read the initial payload from a data-*
+    // attribute, then take over via polling" split the Dashboard's own
+    // network/node-tree widgets use, applied to a live-editable table
+    // instead of a read-only chart. Gated the same way every other
+    // Settings endpoint is - reachable directly by URL, not just via this
+    // page, so it needs its own check.
     public function nodeStatus(): ResponseInterface
     {
         if (! (auth()->user()?->inGroup('superadmin'))) {
@@ -156,7 +165,7 @@ class SettingsController extends BaseController
 
         $health = class_exists(\AdGo\Cluster\Cluster::class) ? (new \AdGo\Cluster\Cluster())->peerHealthStatuses() : [];
 
-        return $this->response->setJSON(['nodes' => $health]);
+        return $this->response->setJSON(['nodes' => $health, 'rows' => $this->mergedNodeRows()]);
     }
 
     // See index()'s own 'selfNode' docblock. DB password deliberately
@@ -308,6 +317,26 @@ class SettingsController extends BaseController
         }
 
         return $rows;
+    }
+
+    // nodeRows()/databaseRows() merged BY NODE (each node's Databases
+    // record nested under its own "database" key) - the exact shape
+    // exportSettings() has always built inline, extracted here so
+    // nodeStatus() below can serve the SAME data live instead of carrying
+    // a second copy of this merge. See exportSettings()'s own docblock for
+    // the shape's origin (asyncron.nodes.json).
+    //
+    // @return array<string, array<string, mixed>>
+    private function mergedNodeRows(): array
+    {
+        $databaseRows = $this->databaseRows();
+        $nodes        = [];
+        foreach ($this->nodeRows() as $name => $props) {
+            $nodes[$name]             = $props;
+            $nodes[$name]['database'] = $databaseRows[$name] ?? [];
+        }
+
+        return $nodes;
     }
 
     // Reactive Databases table on the Settings page - same autosave/context
@@ -612,13 +641,6 @@ class SettingsController extends BaseController
         $cluster = class_exists(\AdGo\Cluster\Cluster::class) ? new \AdGo\Cluster\Cluster() : null;
         $host    = $cluster?->thisNodeName() ?: (gethostname() ?: 'node');
 
-        $databaseRows = $this->databaseRows();
-        $nodes        = [];
-        foreach ($this->nodeRows() as $name => $props) {
-            $nodes[$name]             = $props;
-            $nodes[$name]['database'] = $databaseRows[$name] ?? [];
-        }
-
         $payload = [
             'exportedAt'        => date('Y-m-d H:i:s'),
             'host'              => $host,
@@ -641,7 +663,7 @@ class SettingsController extends BaseController
             // identity it isn't. '' when this node hasn't generated a
             // keypair yet (still on the legacy shared-secret fallback).
             'signingPrivateKey' => $cluster?->signingPrivateKey() ?? '',
-            'nodes'             => $nodes,
+            'nodes'             => $this->mergedNodeRows(),
         ];
 
         $filename = $host . '-' . date('Y-m-d_H-i-s') . '.json';
