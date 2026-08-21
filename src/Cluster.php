@@ -1163,6 +1163,94 @@ class Cluster
         ];
     }
 
+    // Composite per-peer health for the Settings page's node-status LED
+    // list - ONE of 'ok'/'bad'/'idle' per peer, combining FOUR independent
+    // signals so a problem invisible to file sync alone (an unreachable NAT
+    // peer with no sync attempt logged yet, a DB-sync auth mismatch, a
+    // stuck queue job) still shows red instead of the more ambiguous
+    // "idle/unknown" grey this method's own networkSummary() call would
+    // give it on its own:
+    // - file sync (this method's own networkSummary() call - lastSyncOk
+    //   for a public peer, "has it ever pushed in" for a NAT one, same
+    //   direction split every other per-peer signal here uses)
+    // - SSH reachability (writable/Cluster/ssh_connections.json via
+    //   SshConnectivityLog) - the STANDING login-and-exec check
+    //   (SshChecker), independent of any sync attempt ever having run
+    // - DB sync (writable/Cluster/db_sync_log.json via DbSyncLog) -
+    //   direction-aware "most recent attempt wins", same rule
+    //   dbSyncDashboardSummary() already uses (push-out for a public peer,
+    //   pull for a NAT one; the log is oldest-first, so a plain overwrite
+    //   while iterating in order naturally leaves the latest attempt)
+    // - stuck/failing queue jobs (the 'cluster' DB group's own
+    //   queue_jobs_failed table - literally writable/Cluster/cluster.db,
+    //   not a JSON log; PushFileJob's own payload carries the target peer
+    //   under data.peer)
+    // ANY explicit failure among the four marks a peer 'bad' even if
+    // another signal looks fine; 'idle' only when NONE of the four have
+    // reported anything at all yet. Best-effort throughout - a broken/
+    // unreachable 'cluster' DB connection must not take a whole page down
+    // with it (see the try/catch below), same convention the JSON-log
+    // classes themselves already use for a missing file.
+    //
+    // @return array<string, string> peer name => 'ok'|'bad'|'idle'
+    public function peerHealthStatuses(): array
+    {
+        $network = $this->networkSummary();
+
+        $ssh = class_exists(SshConnectivityLog::class)
+            ? (new SshConnectivityLog($this->config))->all()
+            : [];
+
+        $dbSyncOkByPeer = [];
+        if (class_exists(DbSyncLog::class)) {
+            foreach ((new DbSyncLog($this->config))->all() as $entry) {
+                $peer = (string) ($entry['peer'] ?? '');
+                if ($peer === '' || ! in_array($entry['direction'] ?? '', ['push-out', 'pull'], true)) {
+                    continue;
+                }
+                // Oldest-first log - a plain overwrite while iterating in
+                // order naturally leaves the MOST RECENT attempt per peer.
+                $dbSyncOkByPeer[$peer] = (bool) ($entry['ok'] ?? false);
+            }
+        }
+
+        $queueFailedByPeer = [];
+        try {
+            $db = \Config\Database::connect('cluster');
+            if ($db->tableExists('queue_jobs_failed')) {
+                foreach ($db->table('queue_jobs_failed')->select('payload')->get()->getResultArray() as $row) {
+                    $decoded = json_decode((string) $row['payload'], true);
+                    $peer    = (string) ($decoded['data']['peer'] ?? '');
+                    if ($peer !== '') {
+                        $queueFailedByPeer[$peer] = ($queueFailedByPeer[$peer] ?? 0) + 1;
+                    }
+                }
+            }
+        } catch (\Throwable $e) {
+            // 'cluster' DB group unreachable/misconfigured - queue health
+            // just stays unknown (0) for every peer rather than breaking
+            // the whole status list over a side signal.
+        }
+
+        $statuses = [];
+        foreach ($network['nodes'] as $name => $node) {
+            $fileOk = $node['type'] === 'nat' ? ($node['lastPushInAt'] !== null) : $node['lastSyncOk'];
+            $sshOk  = $ssh[$name]['ok'] ?? null;
+            $dbOk   = $dbSyncOkByPeer[$name] ?? null;
+            $queueFailed = $queueFailedByPeer[$name] ?? 0;
+
+            if ($fileOk === false || $sshOk === false || $dbOk === false || $queueFailed > 0) {
+                $statuses[$name] = 'bad';
+            } elseif ($fileOk === true || $sshOk === true || $dbOk === true) {
+                $statuses[$name] = 'ok';
+            } else {
+                $statuses[$name] = 'idle';
+            }
+        }
+
+        return $statuses;
+    }
+
     public function dashboardSummary(): array
     {
         $totalFiles   = 0;

@@ -46,6 +46,30 @@
             </div>
         </div>
     </div>
+    <?php if ($nodeHealth !== []) : ?>
+    <!-- One tricolor LED per peer (green/red/gray) - see
+         Cluster::peerHealthStatuses()'s own docblock for the composite
+         signal behind each color. Rendered here for the first load only;
+         settings-node-status.js polls SettingsController::nodeStatus()
+         every 5s to keep it live from then on, same "read the initial
+         payload straight from a data-* attribute, then take over via
+         polling" split the Dashboard's own node/network widgets use. -->
+    <div class="col-12 col-lg-4">
+        <div class="card card-sm">
+            <div class="card-header">
+                <h3 class="card-title mb-0"><?= lang('App.nodeStatusTitle') ?></h3>
+            </div>
+            <div class="card-body" id="node-status-list" data-status-url="<?= url_to('SettingsController::nodeStatus') ?>">
+                <?php foreach ($nodeHealth as $peerName => $status) : ?>
+                    <div class="d-flex align-items-center gap-2 py-1">
+                        <span class="legend-dot" data-led="<?= esc($peerName) ?>" style="background:var(--node-led-<?= esc($status) ?>)"></span>
+                        <span class="text-truncate"><?= esc($peerName) ?></span>
+                    </div>
+                <?php endforeach ?>
+            </div>
+        </div>
+    </div>
+    <?php endif ?>
 </div>
 <?php
     // Unified 2026-08-21: this card used to be two entirely separate
@@ -440,4 +464,7 @@
 </div>
 <?php endif ?>
 <script src="<?= base_url('assets/settings.js') ?>" defer></script>
+<?php if ($nodeHealth !== []) : ?>
+<script src="<?= base_url('assets/settings-node-status.js') ?>" defer></script>
+<?php endif ?>
 <?= $this->endSection() ?>

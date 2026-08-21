@@ -23,15 +23,11 @@
         return String(url || '').replace(/^https?:\/\//i, '').replace(/\/$/, '');
     }
 
-    var COLORS = { self: '#206bc4', ok: '#2fb344', bad: '#d63939', idle: '#8c959e' };
-
-    // Same "how healthy does this peer look" rule dashboard-network.js
-    // uses for its own node/edge coloring - kept in sync intentionally so
-    // the same peer reads the same color across both charts.
-    function healthColor(node) {
-        var ok = node.type === 'nat' ? (node.lastPushInAt !== null) : node.lastSyncOk;
-        return ok === null || ok === undefined ? COLORS.idle : (ok ? COLORS.ok : COLORS.bad);
-    }
+    // See dashboard-network.js's own NODE_LED_COLORS/fileSyncHealthColor()
+    // (loaded before this script in dashboard.php) - shared via window
+    // rather than redefined here, same reasoning as humanSize() above.
+    var COLORS = window.NODE_LED_COLORS;
+    var healthColor = window.fileSyncHealthColor;
 
     var chart = echarts.init(container);
     window.addEventListener('resize', function () { chart.resize(); });

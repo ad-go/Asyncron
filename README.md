@@ -112,6 +112,12 @@ Everything below rides that same public-push / NAT-pull split:
   request itself supplies. A node with no signing key yet falls back to a legacy shared
   `cluster.secretToken`, but only as a rollout safety net: once every peer's public key is on
   file, the shared secret stops being sufficient on its own to authenticate as anyone.
+- **Node-status LEDs** - the Settings page's Cluster card shows one tricolor LED per peer
+  (green/red/gray), live-updating every 5s (`SettingsController::nodeStatus()` +
+  `public/assets/settings-node-status.js`). The color is a composite of four independent
+  signals (`Cluster::peerHealthStatuses()`) - file sync, SSH reachability, DB sync, and
+  stuck/failing queue jobs - so a peer with no file-sync attempt logged yet still shows red
+  when one of the other three has actually failed, rather than reading as merely idle.
 
 ## Not built yet
 

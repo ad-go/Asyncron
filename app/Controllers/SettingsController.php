@@ -134,7 +134,29 @@ class SettingsController extends BaseController
             // before hitting "+", or ignore it entirely and upload a full
             // topology file instead.
             'selfNode'   => $nodes === [] ? $this->selfNodePreview() : null,
+            // Node-status LED card (moved here from the Dashboard) - see
+            // Cluster::peerHealthStatuses()'s own docblock for what feeds
+            // it. Rendered here for the first page load only; nodeStatus()
+            // below is what settings-node-status.js polls every 5s to keep
+            // it live without a full page reload.
+            'nodeHealth' => $cluster?->peerHealthStatuses() ?? [],
         ] + $this->layoutData());
+    }
+
+    // Polled by public/assets/settings-node-status.js every 5s so the
+    // node-status LED card updates live - same data index() already
+    // renders server-side on first load, re-served as JSON. Gated the same
+    // way every other Settings endpoint is - reachable directly by URL,
+    // not just via this page, so it needs its own check.
+    public function nodeStatus(): ResponseInterface
+    {
+        if (! (auth()->user()?->inGroup('superadmin'))) {
+            return $this->response->setStatusCode(403)->setJSON(['ok' => false]);
+        }
+
+        $health = class_exists(\AdGo\Cluster\Cluster::class) ? (new \AdGo\Cluster\Cluster())->peerHealthStatuses() : [];
+
+        return $this->response->setJSON(['nodes' => $health]);
     }
 
     // See index()'s own 'selfNode' docblock. DB password deliberately

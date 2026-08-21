@@ -1,46 +1,6 @@
 <?= $this->extend('Layout/app') ?>
 <?= $this->section('content') ?>
 <?php if ($networkInfo !== null) : ?>
-<?php if ($networkInfo['nodes'] !== []) :
-    // Same composite "how healthy does this peer look" rule
-    // dashboard-node-status.js applies on every live update below -
-    // computed here too so the very first render (before that script's
-    // first cluster:network-info event) isn't just an empty/gray list.
-    // Bad beats ok beats idle: ANY explicit failure signal (file sync,
-    // SSH, DB sync, or a stuck queue job) marks a peer red even if
-    // another signal looks fine; idle only when NONE of the four have
-    // reported anything yet.
-    $ledColor = static function (array $node): string {
-        $isNat  = $node['type'] === 'nat';
-        $fileOk = $isNat ? ($node['lastPushInAt'] !== null) : $node['lastSyncOk'];
-        if ($fileOk === false || $node['sshOk'] === false || $node['dbSyncOk'] === false || $node['queueFailed'] > 0) {
-            return '#d63939';
-        }
-        if ($fileOk === true || $node['sshOk'] === true || $node['dbSyncOk'] === true) {
-            return '#2fb344';
-        }
-
-        return '#8c959e';
-    };
-?>
-<div class="row row-cards mb-4 justify-content-end">
-    <div class="col-12 col-sm-6 col-lg-3">
-        <div class="card card-sm">
-            <div class="card-header">
-                <h3 class="card-title mb-0"><?= lang('App.nodeStatusTitle') ?></h3>
-            </div>
-            <div class="card-body" id="node-status-list">
-                <?php foreach ($networkInfo['nodes'] as $peerName => $peerRow) : ?>
-                    <div class="d-flex align-items-center gap-2 py-1">
-                        <span class="legend-dot" style="background:<?= $ledColor($peerRow) ?>"></span>
-                        <span class="text-truncate"><?= esc($peerName) ?></span>
-                    </div>
-                <?php endforeach ?>
-            </div>
-        </div>
-    </div>
-</div>
-<?php endif ?>
 <div class="row row-cards mb-4" id="net-summary">
     <div class="col-6 col-sm-4 col-lg-2">
         <div class="card card-sm h-100"><div class="card-body">
@@ -158,10 +118,10 @@
                     ]), 'attr') ?>"
                 ></div>
                 <div class="d-flex flex-wrap gap-3 justify-content-center mt-2 text-secondary" style="font-size:.75rem;">
-                    <span><span class="legend-dot" style="background:#206bc4"></span> <?= lang('App.netThisNode') ?></span>
-                    <span><span class="legend-dot" style="background:#2fb344"></span> <?= lang('App.netLegendOk') ?></span>
-                    <span><span class="legend-dot" style="background:#d63939"></span> <?= lang('App.netLegendError') ?></span>
-                    <span><span class="legend-dot" style="background:#8c959e"></span> <?= lang('App.netLegendIdle') ?></span>
+                    <span><span class="legend-dot" style="background:var(--node-led-self)"></span> <?= lang('App.netThisNode') ?></span>
+                    <span><span class="legend-dot" style="background:var(--node-led-ok)"></span> <?= lang('App.netLegendOk') ?></span>
+                    <span><span class="legend-dot" style="background:var(--node-led-bad)"></span> <?= lang('App.netLegendError') ?></span>
+                    <span><span class="legend-dot" style="background:var(--node-led-idle)"></span> <?= lang('App.netLegendIdle') ?></span>
                 </div>
                 <hr class="my-3">
                 <div class="table-responsive">
@@ -282,7 +242,6 @@
 </div>
 
 <style>
-.legend-dot{display:inline-block;width:.6rem;height:.6rem;border-radius:50%;vertical-align:middle;}
 .dash-card-text{min-width:0;}
 </style>
 <?php elseif (! $clusterInstalled) : ?>
@@ -294,7 +253,6 @@
 <?php if ($networkInfo !== null) : ?>
 <script src="<?= base_url('assets/echarts/echarts.min.js') ?>" defer></script>
 <script src="<?= base_url('assets/dashboard-network.js') ?>" defer></script>
-<script src="<?= base_url('assets/dashboard-node-status.js') ?>" defer></script>
 <script src="<?= base_url('assets/dashboard-node-tree.js') ?>" defer></script>
 <?php if ($tableInfo !== null && $tableInfo['tables'] !== []) : ?>
 <script src="<?= base_url('assets/dashboard-tables.js') ?>" defer></script>

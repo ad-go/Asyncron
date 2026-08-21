@@ -39,7 +39,35 @@
         { name: 'public' },
         { name: 'nat' },
     ];
-    var COLORS = { self: '#206bc4', ok: '#2fb344', bad: '#d63939', idle: '#8c959e' };
+
+    // Single source of truth for both the color VALUES (read from
+    // app.css's :root custom properties, not hardcoded here - keeps CSS
+    // and every chart that colors a node in sync automatically) and the
+    // file-sync-only "how healthy does this peer look" rule - exposed on
+    // window, same "define once in the script listed first, reuse from
+    // there" convention this file's own humanSize() below already
+    // established, so dashboard-node-tree.js doesn't carry its own
+    // second copy of either. Safe for the same ordering reason
+    // humanSize() already documents: deferred scripts run fully, in
+    // document order, before the next one starts.
+    var rootStyle = getComputedStyle(document.documentElement);
+    var COLORS = {
+        self: rootStyle.getPropertyValue('--node-led-self').trim() || '#206bc4',
+        ok:   rootStyle.getPropertyValue('--node-led-ok').trim() || '#2fb344',
+        bad:  rootStyle.getPropertyValue('--node-led-bad').trim() || '#d63939',
+        idle: rootStyle.getPropertyValue('--node-led-idle').trim() || '#8c959e',
+    };
+    window.NODE_LED_COLORS = COLORS;
+
+    // File-sync ok/error/never-attempted, one peer at a time - lastSyncOk
+    // for a public peer, "has it ever pushed in" for a NAT one (that
+    // direction's own ok/error breakdown isn't tracked per-attempt the way
+    // push-out is, so "received at least one push" is the closest signal
+    // available here).
+    window.fileSyncHealthColor = function (node) {
+        var ok = node.type === 'nat' ? (node.lastPushInAt !== null) : node.lastSyncOk;
+        return ok === null || ok === undefined ? COLORS.idle : (ok ? COLORS.ok : COLORS.bad);
+    };
 
     // Node circle size scales (sqrt, not linear - a peer with 100x the
     // transfer volume of another shouldn't render 100x the radius, or the
@@ -70,8 +98,7 @@
         var links = nodeNames.map(function (name) {
             var node = info.nodes[name];
             var isNat = node.type === 'nat';
-            var ok = isNat ? (node.lastPushInAt !== null) : node.lastSyncOk;
-            var color = ok === null || ok === undefined ? COLORS.idle : (ok ? COLORS.ok : COLORS.bad);
+            var color = window.fileSyncHealthColor(node);
 
             nodes.push({
                 id: name,

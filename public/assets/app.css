@@ -249,3 +249,16 @@ img.avatar { object-fit: cover; }
         z-index: 1020;
     }
 }
+
+/* Shared health-status colors - ONE definition both the Dashboard's own
+   Network graph legend and the Settings page's node-status LED card read
+   from (PHP's initial render via var(--node-led-{status}) and
+   settings-node-status.js's own live poll alike), so a color never has to
+   be kept in sync across three places by hand. */
+:root {
+    --node-led-self: #206bc4;
+    --node-led-ok: #2fb344;
+    --node-led-bad: #d63939;
+    --node-led-idle: #8c959e;
+}
+.legend-dot { display: inline-block; width: .6rem; height: .6rem; border-radius: 50%; vertical-align: middle; }
