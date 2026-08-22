@@ -748,6 +748,65 @@ class SettingsController extends BaseController
         ]);
     }
 
+    // Self-heals a specific ownership flip found live 2026-08-22 on bak:
+    // this project's own installer chmod's the whole app tree a+rwX at
+    // install time, run over SSH as the deploy login user (see "Working
+    // conventions" - SSH login user vs PHP-FPM user commonly differ on
+    // this project's own nodes) - but writable/ subdirectories can end up
+    // RECREATED later, owned by whichever user's process happened to
+    // write there first (a web request under PHP-FPM's own user, say),
+    // silently undoing that chmod for anything created afterward by the
+    // OTHER user (cron-triggered CLI commands, typically run as the SSH
+    // login user via crontab). Whichever direction is currently broken,
+    // this endpoint fixes it FROM THE PHP-FPM SIDE: since it runs as
+    // that same PHP-FPM user, a chmod() call here succeeds exactly when
+    // PHP-FPM already owns (or otherwise has rights to) the path - the
+    // other direction (SSH-login-user-owned, PHP-FPM locked out) still
+    // needs a real `chmod` run over SSH as that owning user, which this
+    // can't substitute for (see deploy_env_write_permissions - a
+    // genuine Unix ownership rule, not a bug this code works around).
+    // Best-effort per-path, not all-or-nothing - one un-owned file
+    // failing must never stop the rest of the tree from getting fixed.
+    public function fixWritablePermissions(): ResponseInterface
+    {
+        if (! (auth()->user()?->inGroup('superadmin'))) {
+            return $this->response->setStatusCode(403)->setJSON(['ok' => false]);
+        }
+
+        $root = rtrim(WRITEPATH, '/\\');
+        if (! is_dir($root)) {
+            return $this->response->setStatusCode(503)->setJSON(['ok' => false, 'error' => 'writable/ not found.']);
+        }
+
+        $fixed  = 0;
+        $failed = [];
+
+        $apply = static function (string $path, int $mode) use (&$fixed, &$failed): void {
+            if (@chmod($path, $mode)) {
+                $fixed++;
+            } else {
+                $failed[] = $path;
+            }
+        };
+
+        $apply($root, 0777);
+
+        $iterator = new \RecursiveIteratorIterator(
+            new \RecursiveDirectoryIterator($root, \FilesystemIterator::SKIP_DOTS),
+            \RecursiveIteratorIterator::SELF_FIRST
+        );
+        foreach ($iterator as $item) {
+            $apply((string) $item, $item->isDir() ? 0777 : 0666);
+        }
+
+        return $this->response->setJSON([
+            'ok'     => true,
+            'fixed'  => $fixed,
+            'failed' => $failed,
+            'csrf'   => $this->csrfPayload(),
+        ]);
+    }
+
     // Drops one small marker file into the first configured syncPaths
     // directory (writable/share/ by default) right before cluster:sync-files
     // runs below, so this click always has something real to push -

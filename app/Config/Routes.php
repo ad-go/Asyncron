@@ -35,6 +35,7 @@ $routes->get('settings/test-result', 'SettingsController::testResult', ['filter'
 $routes->get('settings/node-status', 'SettingsController::nodeStatus', ['filter' => 'session']);
 $routes->get('settings/cluster-identity', 'SettingsController::clusterIdentity', ['filter' => 'session']);
 $routes->post('settings/cluster-restart', 'SettingsController::restartCluster', ['filter' => 'session']);
+$routes->post('settings/fix-writable-permissions', 'SettingsController::fixWritablePermissions', ['filter' => 'session']);
 $routes->post('settings/databases', 'SettingsController::updateDatabase', ['filter' => 'session']);
 $routes->post('settings/logo', 'SettingsController::uploadLogo', ['filter' => 'session']);
 $routes->post('settings/logo/delete', 'SettingsController::deleteLogo', ['filter' => 'session']);
