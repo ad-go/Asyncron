@@ -31,6 +31,10 @@ One command. It fetches every dependency, generates `.env` (SQLite by default, a
 Change that password from the Profile page before this goes anywhere near the public internet -
 see `app/Commands/InstallCommand.php` if you ever need to re-run or adjust this step.
 
+A live instance seeded with these exact credentials is running at
+**[beta.upz.ro](https://beta.upz.ro)** - log in there directly rather than installing locally just
+to look around.
+
 ## Running it
 
 - Point your webserver's document root at `public/`.
@@ -118,12 +122,22 @@ Everything below rides that same public-push / NAT-pull split:
   signals (`Cluster::peerHealthStatuses()`) - file sync, SSH reachability, DB sync, and
   stuck/failing queue jobs - so a peer with no file-sync attempt logged yet still shows red
   when one of the other three has actually failed, rather than reading as merely idle.
+- **Restart cluster** - the same Node-status card's own icon button
+  (`SettingsController::restartCluster()`) tests every known peer's file-sync AND database
+  credentials in one click (public peers synchronously, NAT peers queued for their own next
+  pull cycle same as any other test), then kicks `cluster:sync-files`/`cluster:sync-db`/a
+  `queue:work` drain/`cluster:realign` off immediately instead of waiting for the next
+  cron-triggered `tasks:run` tick. Each of those runs as a bounded child process (a few seconds
+  each, not awaited to completion) - the point is a head start, not a synchronous guarantee;
+  the normal per-minute cron cadence still finishes whatever a short budget didn't.
+- **Conflict resolution UI** - the Dashboard's own "File conflicts" card lists every conflict
+  `Cluster::preserveConflictLoser()` has ever archived (winner/loser/when), with a "Restore
+  archived version" button per row (`Dashboard::restoreConflict()`) that copies the archived
+  losing bytes back over the current file and lets the next `cluster:sync-files` pass push that
+  reversal out to every peer, same as any other local edit would.
 
 ## Not built yet
 
-- No Dashboard UI for conflict resolution - a losing file is archived and logged
-  (`Cluster::preserveConflictLoser()`, `src/ConflictLog.php`) on every conflict, but there's no
-  viewer to browse or restore from it yet, only the CLI/filesystem.
 - The Dashboard's "synced" status reflects this node's own manifest, not a confirmed per-peer
   delivery receipt - it means "this node has this exact content," not "every peer definitely does
   too."

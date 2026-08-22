@@ -114,4 +114,64 @@
     }
 
     setInterval(poll, 5000);
+
+    // "Restart cluster" icon (see app/Views/Settings/index.php's own
+    // docblock on it, and SettingsController::restartCluster()'s - closes
+    // the README "Not built yet" gap between testing ONE peer's own badge
+    // and actually doing something cluster-wide). One click, one bounded
+    // request (server-side budget keeps this well under any host's real
+    // max_execution_time - see that controller method's own docblock) -
+    // the spin class is purely visual feedback for that single request,
+    // not a poll of its own; applyStatuses() above already refreshes the
+    // LEDs a few seconds later once sync/realign actually change
+    // anything.
+    var restartBtn = document.getElementById('settings-restart-cluster-btn');
+    var restartResult = document.getElementById('settings-restart-cluster-result');
+    if (restartBtn && restartResult) {
+        var restartEndpoint = restartBtn.dataset.restartEndpoint;
+        var restartStrings = JSON.parse(restartBtn.dataset.restartStrings || '{}');
+        var restartIcon = restartBtn.querySelector('svg');
+
+        function showRestartResult(text, isError) {
+            restartResult.textContent = text;
+            restartResult.classList.remove('d-none');
+            restartResult.classList.toggle('text-red', !!isError);
+        }
+
+        restartBtn.addEventListener('click', function () {
+            if (restartBtn.classList.contains('disabled')) return;
+            restartBtn.classList.add('disabled');
+            if (restartIcon) restartIcon.style.animation = 'spinner-border 0.75s linear infinite';
+            restartResult.classList.add('d-none');
+
+            var body = new URLSearchParams();
+            if (window.CI4_CSRF) body.set(window.CI4_CSRF.name, window.CI4_CSRF.hash);
+
+            fetch(restartEndpoint, { method: 'POST', body: body, headers: { 'X-Requested-With': 'XMLHttpRequest' } })
+                .then(function (r) { return r.json(); })
+                .then(function (data) {
+                    if (window.syncCsrf) window.syncCsrf(data);
+                    if (!data || !data.ok) {
+                        showRestartResult((restartStrings.failed || '{0}').replace('{0}', (data && data.error) || ''), true);
+
+                        return;
+                    }
+                    var names = Object.keys(data.tested || {});
+                    var ok = names.filter(function (n) { return data.tested[n].ok === true; }).length;
+                    var pending = names.filter(function (n) { return data.tested[n].pending; }).length;
+                    var msg = (restartStrings.done || '{0}/{1}/{2}')
+                        .replace('{0}', names.length)
+                        .replace('{1}', ok)
+                        .replace('{2}', pending);
+                    showRestartResult(msg, false);
+                })
+                .catch(function () {
+                    showRestartResult((restartStrings.failed || '{0}').replace('{0}', ''), true);
+                })
+                .finally(function () {
+                    restartBtn.classList.remove('disabled');
+                    if (restartIcon) restartIcon.style.animation = '';
+                });
+        });
+    }
 })();

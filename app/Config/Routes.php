@@ -14,6 +14,7 @@ use CodeIgniter\Router\RouteCollection;
 // '/dashboard' string.
 $routes->get('/', 'Dashboard::index', ['as' => 'dashboard', 'filter' => 'session']);
 $routes->get('dashboard/network-status', 'Dashboard::networkStatus', ['filter' => 'session']);
+$routes->post('dashboard/restore-conflict', 'Dashboard::restoreConflict', ['filter' => 'session']);
 $routes->post('locale', 'LocaleController::update', ['as' => 'locale.update']);
 $routes->get('login', 'AuthController::loginView', ['as' => 'login']);
 $routes->post('login', 'AuthController::loginAction');
@@ -33,6 +34,7 @@ $routes->post('settings/nodes/test', 'SettingsController::testNode', ['filter' =
 $routes->get('settings/test-result', 'SettingsController::testResult', ['filter' => 'session']);
 $routes->get('settings/node-status', 'SettingsController::nodeStatus', ['filter' => 'session']);
 $routes->get('settings/cluster-identity', 'SettingsController::clusterIdentity', ['filter' => 'session']);
+$routes->post('settings/cluster-restart', 'SettingsController::restartCluster', ['filter' => 'session']);
 $routes->post('settings/databases', 'SettingsController::updateDatabase', ['filter' => 'session']);
 $routes->post('settings/logo', 'SettingsController::uploadLogo', ['filter' => 'session']);
 $routes->post('settings/logo/delete', 'SettingsController::deleteLogo', ['filter' => 'session']);

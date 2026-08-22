@@ -3,6 +3,7 @@
 namespace App\Controllers;
 
 use AdGo\Cluster\Cluster;
+use AdGo\Cluster\ConflictLog;
 use AdGo\Cluster\SessionInvalidation;
 use CodeIgniter\HTTP\ResponseInterface;
 
@@ -24,6 +25,7 @@ class Dashboard extends BaseController
             'user'        => auth()->user(),
             'networkInfo' => $isSuperadmin ? $this->networkInfo() : null,
             'tableInfo'   => $isSuperadmin ? $this->tableInfo() : null,
+            'conflicts'   => $isSuperadmin ? $this->conflicts() : null,
             // Distinct from networkInfo === null - that's also true for a
             // logged-in NON-superadmin even when ad-go/cluster is
             // installed, and the two need different messages (found live
@@ -132,6 +134,88 @@ class Dashboard extends BaseController
         }
 
         return ['tables' => $tables, 'sizeSupported' => $stats['sizeSupported'], 'nodeStats' => $nodeStats];
+    }
+
+    // README "Not built yet" gap #1: Cluster::preserveConflictLoser() has
+    // always archived the losing side's bytes and logged the event
+    // (writable/Cluster/conflicts/, ConflictLog) on every real conflict -
+    // there was just never a Dashboard viewer for it, only the raw
+    // filesystem/CLI. Newest first (the log itself is oldest-first, same
+    // append order every ring-buffer log in this project uses).
+    //
+    // @return list<array<string, mixed>>
+    private function conflicts(): array
+    {
+        if (! class_exists(ConflictLog::class)) {
+            return [];
+        }
+
+        $entries = array_reverse((new ConflictLog())->all());
+        foreach ($entries as &$entry) {
+            $entry['timeAgo'] = $this->timeAgo((int) ($entry['time'] ?? 0));
+        }
+        unset($entry);
+
+        return $entries;
+    }
+
+    // The other half of conflicts() above - "restore" (see this project's
+    // README "Not built yet") means making the archived LOSER the current
+    // content again, exactly as if it had won the original conflict:
+    // copies the archived bytes back over the live file, then
+    // finalizeIncomingFile() so the manifest hash changes and the next
+    // cluster:sync-files pass notices and pushes the reverted content out
+    // to every peer, same as any other local edit would. Never deletes
+    // the archive or the log entry - see ConflictLog::markRestored()'s own
+    // docblock on why a restore doesn't erase the conflict having
+    // happened.
+    //
+    // $archive is matched against a REAL logged entry (not just any
+    // filename under conflicts/) before anything is touched - the only
+    // way to reach an archive this endpoint didn't already know about is
+    // to already have write access to writable/Cluster/ directly, at
+    // which point this check buys nothing extra, but it does stop a bare
+    // "restore this filename" request from resurrecting something the log
+    // itself was already pruned past MAX_ENTRIES.
+    public function restoreConflict(): ResponseInterface
+    {
+        if (! (auth()->user()?->inGroup('superadmin'))) {
+            return $this->response->setStatusCode(403)->setJSON(['ok' => false]);
+        }
+        if (! class_exists(Cluster::class) || ! class_exists(ConflictLog::class)) {
+            return $this->response->setStatusCode(503)->setJSON(['ok' => false]);
+        }
+
+        $archive      = (string) $this->request->getPost('archive');
+        $relativePath = (string) $this->request->getPost('path');
+
+        $log   = new ConflictLog();
+        $found = null;
+        foreach ($log->all() as $entry) {
+            if (($entry['archive'] ?? '') === $archive && ($entry['path'] ?? '') === $relativePath) {
+                $found = $entry;
+                break;
+            }
+        }
+        if ($archive === '' || $relativePath === '' || $found === null) {
+            return $this->response->setStatusCode(422)->setJSON(['ok' => false, 'error' => lang('App.conflictRestoreNotFound')]);
+        }
+
+        $archivePath = dirname($log->path()) . '/conflicts/' . $archive;
+        if (! is_file($archivePath)) {
+            return $this->response->setStatusCode(422)->setJSON(['ok' => false, 'error' => lang('App.conflictRestoreMissingArchive')]);
+        }
+
+        $cluster    = new Cluster();
+        $targetPath = $cluster->resolveIncomingPath($relativePath);
+        if ($targetPath === null || ! @copy($archivePath, $targetPath)) {
+            return $this->response->setStatusCode(500)->setJSON(['ok' => false, 'error' => lang('App.conflictRestoreFailed')]);
+        }
+
+        $cluster->finalizeIncomingFile($relativePath, $targetPath, time());
+        $log->markRestored($archive, time());
+
+        return $this->response->setJSON(['ok' => true, 'csrf' => $this->csrfPayload()]);
     }
 
     // Same check SessionInvalidationFilter itself makes on every request

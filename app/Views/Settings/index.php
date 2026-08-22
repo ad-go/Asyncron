@@ -59,7 +59,27 @@
         <div class="card card-sm">
             <div class="card-header">
                 <h3 class="card-title mb-0"><?= lang('App.nodeStatusTitle') ?></h3>
+                <!-- "Restart cluster" - the app/README "Not built yet" gap
+                     between clicking one node's own test badge and actually
+                     doing something about a stale/broken mesh: one click
+                     tests every known peer (reusing the same combined node+
+                     database check the per-row badge already does, just
+                     looped) AND kicks off cluster:sync-files/cluster:sync-db/
+                     a queue:work drain/cluster:realign right now instead of
+                     waiting for the next cron tick - see
+                     SettingsController::restartCluster()'s own docblock for
+                     why each of those is bounded rather than awaited in
+                     full. -->
+                <div class="card-actions ms-auto">
+                    <span class="btn btn-icon btn-sm" id="settings-restart-cluster-btn"
+                          data-restart-endpoint="<?= url_to('SettingsController::restartCluster') ?>"
+                          data-restart-strings="<?= esc(json_encode(['done' => lang('App.restartClusterDone'), 'failed' => lang('App.restartClusterFailed')]), 'attr') ?>"
+                          title="<?= esc(lang('App.restartClusterButton')) ?>" aria-label="<?= esc(lang('App.restartClusterButton')) ?>" role="button" tabindex="0">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M20 11a8.1 8.1 0 0 0 -15.5 -2m-.5 -4v4h4" /><path d="M4 13a8.1 8.1 0 0 0 15.5 2m.5 4v-4h-4" /></svg>
+                    </span>
+                </div>
             </div>
+            <div class="text-muted small px-3 pt-2 d-none" id="settings-restart-cluster-result"></div>
             <div class="card-body" id="node-status-list">
                 <?php foreach ($nodeHealth as $peerName => $status) : ?>
                     <div class="d-flex align-items-center gap-2 py-1">

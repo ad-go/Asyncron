@@ -17,6 +17,22 @@ class SettingsController extends BaseController
     // ships (see this repo's README - Tabler's CSS/JS isn't bundled here).
     public const THEME_COLORS = ['blue', 'azure', 'indigo', 'purple', 'pink', 'red', 'orange', 'yellow', 'lime', 'green', 'teal', 'cyan'];
 
+    // restartCluster()'s own budgets - see that method's own docblock.
+    // Worst case (every public peer down/slow AND every subprocess running
+    // its own full budget): at most 3 public peers (this cluster's own
+    // topology never has more than h1q/beta/upz as 'public' - bak/res are
+    // 'nat', never awaited here) x RESTART_PEER_TEST_TIMEOUT, plus all 4
+    // subprocess budgets = (3 x 3) + (2+2+4+4) = 21s - comfortably under
+    // this cluster's tightest real max_execution_time (30s on beta/upz,
+    // verified live 2026-08-20 - see LongPollController's own docblock for
+    // that same number), leaving margin for CI4's own boot time and JSON
+    // encoding. A genuinely down peer should fail fast here, not eat a
+    // meaningful share of one click's budget.
+    private const RESTART_PEER_TEST_TIMEOUT      = 3;
+    private const RESTART_SYNC_BUDGET_SECONDS    = 2;
+    private const RESTART_QUEUE_BUDGET_SECONDS   = 4;
+    private const RESTART_REALIGN_BUDGET_SECONDS = 4;
+
     // Per-node fields editable from the Nodes table below. 'name' isn't in
     // here - it's the row key (ad-go/cluster's own node registry), not an
     // editable value. Stored as Settings key 'Nodes.{prop}' with the node
@@ -598,10 +614,10 @@ class SettingsController extends BaseController
         return (new \AdGo\Cluster\CapabilityChecker())->run($kind, $params);
     }
 
-    private function callRemoteTest(\AdGo\Cluster\Cluster $cluster, string $baseURL, array $params): array
+    private function callRemoteTest(\AdGo\Cluster\Cluster $cluster, string $baseURL, array $params, int $timeout = 15): array
     {
         try {
-            $client   = $cluster->peerClient($baseURL, 15);
+            $client   = $cluster->peerClient($baseURL, $timeout);
             $response = $client->post('cluster/test-connection', [
                 'headers' => ['Authorization' => $cluster->authHeader()],
                 'json'    => $params,
@@ -639,6 +655,138 @@ class SettingsController extends BaseController
         }
 
         return $this->response->setJSON($this->localizeTestResult($result) + ['csrf' => $this->csrfPayload()]);
+    }
+
+    // "Restart cluster" icon on the Node-status card (see app/Views/
+    // Settings/index.php) - closes the README "Not built yet" gap between
+    // clicking ONE peer's own test badge and actually doing something
+    // about a stale/broken mesh. Two independent halves, both BOUNDED
+    // rather than awaited in full:
+    //
+    // 1. Tests every known peer - the exact same combined node+database
+    //    check testNode() already runs per-row, just looped. Public peers
+    //    get a real synchronous result (short REMOTE_TEST_TIMEOUT, not the
+    //    normal 15s a single click affords - looping several of these
+    //    inside one request has to stay well under this cluster's
+    //    tightest real max_execution_time, verified live 2026-08-20 as
+    //    30s on beta/upz - see LongPollController's own docblock for that
+    //    same number). NAT peers are never awaited here either way
+    //    (dispatchTest() itself only ever enqueues for those) - queued
+    //    exactly like a real badge click would, for that peer's own next
+    //    pull to claim.
+    // 2. Kicks cluster:sync-files/cluster:sync-db/a queue:work drain/
+    //    cluster:realign off RIGHT NOW instead of waiting for the next
+    //    cron-triggered tasks:run tick - same bounded proc_open-and-kill
+    //    pattern LongPollController::burstOwnQueue() already uses, just
+    //    with a few more seconds' budget each (this is a deliberate, one-
+    //    off admin click, not a per-request burst piggybacking on a
+    //    latency-sensitive long-poll hold). A short budget only means
+    //    THIS click's own head start is partial - the normal cron cadence
+    //    picks up wherever any of these left off within the next minute
+    //    regardless, so a slow peer here is never a stuck request, only a
+    //    smaller-than-hoped-for jump start.
+    public function restartCluster(): ResponseInterface
+    {
+        if (! (auth()->user()?->inGroup('superadmin'))) {
+            return $this->response->setStatusCode(403)->setJSON(['ok' => false]);
+        }
+        if (! class_exists(\AdGo\Cluster\Cluster::class)) {
+            return $this->response->setStatusCode(503)->setJSON(['ok' => false]);
+        }
+
+        $cluster  = new \AdGo\Cluster\Cluster();
+        $thisNode = $cluster->thisNodeName();
+
+        $tested = [];
+        foreach ($cluster->allNodes() as $name => $node) {
+            if ($name === $thisNode) {
+                continue;
+            }
+
+            $params = ['kind' => 'combined', 'node' => $this->nodeTestParams($name), 'database' => $this->databaseTestParams($name)];
+
+            if (($node['type'] ?? '') === 'public') {
+                $result          = $this->localizeTestResult($this->callRemoteTest($cluster, (string) $node['baseURL'], $params, self::RESTART_PEER_TEST_TIMEOUT));
+                $tested[$name]   = ['pending' => false, 'ok' => (bool) ($result['node']['ok'] ?? false) && (bool) ($result['database']['ok'] ?? false)];
+                continue;
+            }
+
+            $requestId = bin2hex(random_bytes(16));
+            if (class_exists(\AdGo\Cluster\RemoteTestQueue::class)) {
+                (new \AdGo\Cluster\RemoteTestQueue())->enqueue($name, $requestId, $params);
+            }
+            $tested[$name] = ['pending' => true, 'requestId' => $requestId];
+        }
+
+        $queueDrainCmd = 'queue:work ' . escapeshellarg($cluster->queueName()) . ' --stop-when-empty -max-jobs 100';
+
+        return $this->response->setJSON([
+            'ok'     => true,
+            'tested' => $tested,
+            'sync'   => [
+                'syncFiles' => $this->runBoundedSpark('cluster:sync-files', self::RESTART_SYNC_BUDGET_SECONDS),
+                'syncDb'    => $this->runBoundedSpark('cluster:sync-db', self::RESTART_SYNC_BUDGET_SECONDS),
+                'queueDrain'=> $this->runBoundedSpark($queueDrainCmd, self::RESTART_QUEUE_BUDGET_SECONDS),
+                'realign'   => $this->runBoundedSpark('cluster:realign', self::RESTART_REALIGN_BUDGET_SECONDS),
+            ],
+            'csrf' => $this->csrfPayload(),
+        ]);
+    }
+
+    // Runs `php spark {commandArgs}` as a child process, bounded from the
+    // OUTSIDE by $maxSeconds regardless of what the child does internally
+    // (a slow peer call, a large file) - same proc_open()-and-terminate
+    // shape as LongPollController::burstOwnQueue(), generalized to any
+    // spark command instead of one hardcoded queue:work invocation.
+    // 'timedOut' - not an error - just means this click's own head start
+    // was partial; the normal cron cadence finishes whatever's left within
+    // the next minute regardless (see restartCluster()'s own docblock).
+    //
+    // @return array{ran: bool, timedOut: bool, output: string, seconds: float}
+    private function runBoundedSpark(string $commandArgs, int $maxSeconds): array
+    {
+        $cmd   = 'php ' . escapeshellarg(ROOTPATH . 'spark') . ' ' . $commandArgs;
+        $start = microtime(true);
+
+        $proc = @proc_open($cmd, [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+        if (! is_resource($proc)) {
+            return ['ran' => false, 'timedOut' => false, 'output' => '', 'seconds' => 0.0];
+        }
+
+        stream_set_blocking($pipes[1], false);
+        stream_set_blocking($pipes[2], false);
+
+        $output = '';
+        while (microtime(true) - $start < $maxSeconds) {
+            $output .= (string) stream_get_contents($pipes[1]);
+            $output .= (string) stream_get_contents($pipes[2]);
+            $status = proc_get_status($proc);
+            if (! $status['running']) {
+                break;
+            }
+            usleep(100000);
+        }
+
+        $timedOut = false;
+        $status   = proc_get_status($proc);
+        if ($status['running']) {
+            @proc_terminate($proc);
+            $timedOut = true;
+        }
+        $output .= (string) stream_get_contents($pipes[1]);
+        $output .= (string) stream_get_contents($pipes[2]);
+        foreach ($pipes as $pipe) {
+            if (is_resource($pipe)) {
+                fclose($pipe);
+            }
+        }
+        @proc_close($proc);
+
+        // CLI::write() color codes make no sense in a JSON field a
+        // browser will render as plain text.
+        $output = (string) preg_replace('/\x1b\[[0-9;]*m/', '', $output);
+
+        return ['ran' => true, 'timedOut' => $timedOut, 'output' => mb_substr(trim($output), -500), 'seconds' => round(microtime(true) - $start, 1)];
     }
 
     // Translates the 'errorCode' (+ optional 'errorArgs') NodeConnectionChecker/

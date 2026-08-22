@@ -241,6 +241,84 @@
     </div>
 </div>
 
+<?php if ($conflicts !== null) : ?>
+<!-- README "Not built yet" gap #1, closed 2026-08-22: a Dashboard viewer
+     for Cluster::preserveConflictLoser()'s own archive+log (the data
+     always existed - writable/Cluster/conflicts/ + ConflictLog - only the
+     UI to browse or restore from it didn't). Always rendered (not gated
+     on $conflicts !== [] like the peer-only cards above) so an admin who's
+     never seen a conflict still knows this exists, same reasoning
+     Settings' own always-rendered Cluster table uses. -->
+<div class="row row-cards mt-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title mb-0"><?= lang('App.conflictsTitle') ?></h3>
+            </div>
+            <?php if ($conflicts === []) : ?>
+            <div class="card-body text-secondary"><?= lang('App.conflictsEmpty') ?></div>
+            <?php else : ?>
+            <div class="table-responsive">
+                <table class="table table-vcenter card-table" id="conflicts-table"
+                       data-restore-endpoint="<?= url_to('Dashboard::restoreConflict') ?>"
+                       data-strings="<?= esc(json_encode([
+                           'restoreButton'  => lang('App.conflictsRestoreButton'),
+                           'restoredBadge'  => lang('App.conflictsRestoredBadge'),
+                           'restoreFailed'  => lang('App.conflictRestoreFailedBadge'),
+                       ]), 'attr') ?>">
+                    <thead>
+                        <tr>
+                            <th><?= lang('App.conflictsColumnWhen') ?></th>
+                            <th><?= lang('App.conflictsColumnPath') ?></th>
+                            <th><?= lang('App.conflictsColumnWinner') ?></th>
+                            <th><?= lang('App.conflictsColumnLoser') ?></th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($conflicts as $entry) : ?>
+                        <tr data-archive="<?= esc($entry['archive'] ?? '') ?>" data-path="<?= esc($entry['path'] ?? '') ?>">
+                            <td class="text-secondary" style="white-space:nowrap;"><?= esc($entry['timeAgo'] ?? '') ?></td>
+                            <td class="text-truncate" style="max-width:22rem;"><?= esc($entry['path'] ?? '') ?></td>
+                            <td><span class="badge bg-green-lt"><?= esc($entry['winner'] ?? '') ?></span></td>
+                            <td><span class="badge bg-red-lt"><?= esc($entry['loser'] ?? '') ?></span></td>
+                            <td class="text-end">
+                                <?php if (! empty($entry['restoredAt'])) : ?>
+                                <span class="badge bg-secondary-lt"><?= lang('App.conflictsRestoredBadge') ?></span>
+                                <?php else : ?>
+                                <button type="button" class="btn btn-sm btn-outline-primary" data-restore-conflict><?= lang('App.conflictsRestoreButton') ?></button>
+                                <?php endif ?>
+                            </td>
+                        </tr>
+                        <?php endforeach ?>
+                    </tbody>
+                </table>
+            </div>
+            <?php endif ?>
+        </div>
+    </div>
+</div>
+<!-- Confirm-modal for "Restore archived version" - same never-a-native-
+     dialog reasoning as every other destructive-ish action in this app
+     (see e.g. Settings/index.php's own delete-node-modal). -->
+<div class="modal modal-blur fade" id="restore-conflict-modal">
+    <div class="modal-dialog modal-dialog-centered modal-sm">
+        <div class="modal-content">
+            <div class="modal-header"><h5 class="modal-title"><?= lang('App.confirmRestoreConflictTitle') ?></h5>
+                <button type="button" class="btn-close" id="restore-conflict-modal-close"></button></div>
+            <div class="modal-body">
+                <?= lang('App.confirmRestoreConflictBody') ?>
+                <div class="text-red small mt-2 d-none" id="restore-conflict-modal-error"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn" id="restore-conflict-modal-cancel"><?= lang('App.cancel') ?></button>
+                <button class="btn btn-primary" id="restore-conflict-modal-confirm"><?= lang('App.conflictsRestoreButton') ?></button>
+            </div>
+        </div>
+    </div>
+</div>
+<?php endif ?>
+
 <style>
 .dash-card-text{min-width:0;}
 </style>
@@ -257,5 +335,8 @@
 <?php if ($tableInfo !== null && $tableInfo['tables'] !== []) : ?>
 <script src="<?= base_url('assets/dashboard-tables.js') ?>" defer></script>
 <?php endif ?>
+<?php endif ?>
+<?php if ($conflicts !== null && $conflicts !== []) : ?>
+<script src="<?= base_url('assets/dashboard-conflicts.js') ?>" defer></script>
 <?php endif ?>
 <?= $this->endSection() ?>

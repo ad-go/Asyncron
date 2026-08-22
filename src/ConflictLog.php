@@ -41,10 +41,55 @@ class ConflictLog
      */
     public function record(array $entry): void
     {
+        $this->mutateAll(static function (array $entries) use ($entry): array {
+            $entries[] = $entry;
+            if (count($entries) > self::MAX_ENTRIES) {
+                $entries = array_slice($entries, -self::MAX_ENTRIES);
+            }
+
+            return $entries;
+        });
+    }
+
+    /**
+     * Marks one entry as restored (adds/overwrites its own 'restoredAt') -
+     * called after cluster-ui's own Dashboard conflict viewer actually
+     * copies $archive's bytes back over the current file (see that
+     * controller's own docblock for the full restore flow this is just
+     * the bookkeeping half of). Matched by 'archive' - the one field
+     * record() already makes unique per event (see conflictPath()'s own
+     * timestamp+source-suffixed filename), so no separate id needed.
+     * Never removes the entry itself - restoring is a normal, expected
+     * outcome of a conflict, not something that un-happens the conflict
+     * ever occurred.
+     */
+    public function markRestored(string $archive, int $time): bool
+    {
+        $found = false;
+        $this->mutateAll(function (array $entries) use ($archive, $time, &$found): array {
+            foreach ($entries as &$entry) {
+                if (($entry['archive'] ?? '') === $archive) {
+                    $entry['restoredAt'] = $time;
+                    $found               = true;
+                }
+            }
+            unset($entry);
+
+            return $entries;
+        });
+
+        return $found;
+    }
+
+    /**
+     * @param callable(list<array<string, mixed>>): list<array<string, mixed>> $mutator
+     */
+    private function mutateAll(callable $mutator): void
+    {
         $path = $this->path();
         $dir  = dirname($path);
         if (! is_dir($dir) && ! mkdir($dir, 0775, true) && ! is_dir($dir)) {
-            return; // best-effort - a log write failing must never break the actual sync
+            return;
         }
 
         $handle = fopen($path, 'cb+');
@@ -57,10 +102,7 @@ class ConflictLog
         $entries  = json_decode((string) $contents, true);
         $entries  = is_array($entries) ? $entries : [];
 
-        $entries[] = $entry;
-        if (count($entries) > self::MAX_ENTRIES) {
-            $entries = array_slice($entries, -self::MAX_ENTRIES);
-        }
+        $entries = $mutator($entries);
 
         ftruncate($handle, 0);
         rewind($handle);
@@ -68,16 +110,13 @@ class ConflictLog
         fflush($handle);
         flock($handle, LOCK_UN);
         fclose($handle);
-        // See Cluster::saveManifest()'s own comment on this - setgid alone
-        // doesn't make a freshly-created file group-writable, only
-        // group-owned.
         @chmod($path, 0666);
     }
 
     /**
      * Oldest-first, same order they were recorded.
      *
-     * @return list<array{time: int, path: string, winner: string, loser: string, archive: string}>
+     * @return list<array{time: int, path: string, winner: string, loser: string, archive: string, restoredAt?: int}>
      */
     public function all(): array
     {
