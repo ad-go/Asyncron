@@ -718,11 +718,14 @@ class SettingsController extends BaseController
             $tested[$name] = ['pending' => true, 'requestId' => $requestId];
         }
 
+        $marker = $this->writeRestartMarkerFile($cluster, $thisNode);
+
         $queueDrainCmd = 'queue:work ' . escapeshellarg($cluster->queueName()) . ' --stop-when-empty -max-jobs 100';
 
         return $this->response->setJSON([
             'ok'     => true,
             'tested' => $tested,
+            'marker' => $marker,
             'sync'   => [
                 'syncFiles' => $this->runBoundedSpark('cluster:sync-files', self::RESTART_SYNC_BUDGET_SECONDS),
                 'syncDb'    => $this->runBoundedSpark('cluster:sync-db', self::RESTART_SYNC_BUDGET_SECONDS),
@@ -731,6 +734,47 @@ class SettingsController extends BaseController
             ],
             'csrf' => $this->csrfPayload(),
         ]);
+    }
+
+    // Drops one small marker file into the first configured syncPaths
+    // directory (writable/share/ by default) right before cluster:sync-files
+    // runs below, so this click always has something real to push -
+    // otherwise "Restart cluster" on a quiet cluster (no pending local
+    // edits) exercises the whole sync/realign chain against zero actual
+    // file activity, which is exactly the "Network"/"Nodes" Dashboard
+    // tables staying at a flat 0 B/0 files that prompted this. Name
+    // encodes node/when/why (not the content - the content is human-
+    // readable filler, never parsed back by anything) so the file is
+    // self-explanatory wherever it lands on a peer, and never collides
+    // with a real file an admin might have dropped there. Best-effort:
+    // a write failure here must never break the rest of the restart.
+    //
+    // @return array{written: bool, path: string}
+    private function writeRestartMarkerFile(\AdGo\Cluster\Cluster $cluster, string $thisNode): array
+    {
+        $dirs = $cluster->syncDirs();
+        $dir  = $dirs[0] ?? null;
+        if ($dir === null) {
+            return ['written' => false, 'path' => ''];
+        }
+        if (! is_dir($dir) && ! @mkdir($dir, 0775, true) && ! is_dir($dir)) {
+            return ['written' => false, 'path' => ''];
+        }
+
+        $nodeLabel = $thisNode !== '' ? $thisNode : 'node';
+        $stamp     = date('Y-m-d_H-i-s');
+        $filename  = $nodeLabel . '_' . $stamp . '_reset.txt';
+        $path      = rtrim($dir, '/\\') . '/' . $filename;
+
+        $written = @file_put_contents(
+            $path,
+            "Cluster restart triggered on {$nodeLabel} at " . date('Y-m-d H:i:s') . " (action: reset)\n"
+        );
+        if ($written !== false) {
+            @chmod($path, 0666);
+        }
+
+        return ['written' => $written !== false, 'path' => 'share/' . $filename];
     }
 
     // Runs `php spark {commandArgs}` as a child process, bounded from the

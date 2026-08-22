@@ -137,11 +137,13 @@ Everything below rides that same public-push / NAT-pull split:
 - **Restart cluster** - the same Node-status card's own icon button
   (`SettingsController::restartCluster()`) tests every known peer's file-sync AND database
   credentials in one click (public peers synchronously, NAT peers queued for their own next
-  pull cycle same as any other test), then kicks `cluster:sync-files`/`cluster:sync-db`/a
-  `queue:work` drain/`cluster:realign` off immediately instead of waiting for the next
-  cron-triggered `tasks:run` tick. Each of those runs as a bounded child process (a few seconds
-  each, not awaited to completion) - the point is a head start, not a synchronous guarantee;
-  the normal per-minute cron cadence still finishes whatever a short budget didn't.
+  pull cycle same as any other test), drops one small marker file (node name, timestamp,
+  `reset`) into the shared sync directory so there's always real content to push even on an
+  otherwise quiet cluster, then kicks `cluster:sync-files`/`cluster:sync-db`/a `queue:work`
+  drain/`cluster:realign` off immediately instead of waiting for the next cron-triggered
+  `tasks:run` tick. Each of those runs as a bounded child process (a few seconds each, not
+  awaited to completion) - the point is a head start, not a synchronous guarantee; the normal
+  per-minute cron cadence still finishes whatever a short budget didn't.
 - **Conflict resolution UI** - the Dashboard's own "File conflicts" card lists every conflict
   `Cluster::preserveConflictLoser()` has ever archived (winner/loser/when), with a "Restore
   archived version" button per row (`Dashboard::restoreConflict()`) that copies the archived
