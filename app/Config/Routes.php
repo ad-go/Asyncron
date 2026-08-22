@@ -32,6 +32,7 @@ $routes->post('settings/nodes', 'SettingsController::updateNode', ['filter' => '
 $routes->post('settings/nodes/test', 'SettingsController::testNode', ['filter' => 'session']);
 $routes->get('settings/test-result', 'SettingsController::testResult', ['filter' => 'session']);
 $routes->get('settings/node-status', 'SettingsController::nodeStatus', ['filter' => 'session']);
+$routes->get('settings/cluster-identity', 'SettingsController::clusterIdentity', ['filter' => 'session']);
 $routes->post('settings/databases', 'SettingsController::updateDatabase', ['filter' => 'session']);
 $routes->post('settings/logo', 'SettingsController::uploadLogo', ['filter' => 'session']);
 $routes->post('settings/logo/delete', 'SettingsController::deleteLogo', ['filter' => 'session']);

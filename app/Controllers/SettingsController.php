@@ -168,6 +168,51 @@ class SettingsController extends BaseController
         return $this->response->setJSON(['nodes' => $health, 'rows' => $this->mergedNodeRows()]);
     }
 
+    // Read-only diagnostic for re-pairing two peers whose signed
+    // Authorization header exchange is stuck - see Cluster::
+    // verifyAuthHeader()'s own docblock ("a signed-but-invalid header is a
+    // hard reject, not a silent downgrade") and autoStartCluster()'s own
+    // "stops after the FIRST peer" comment: once one handshake succeeds
+    // ANYWHERE in the mesh, autoStartCluster() never automatically retries
+    // any OTHER still-unpaired peer, and there is no UI button that
+    // re-triggers just one specific pair. Surfaces exactly what
+    // clusterHandshake() itself needs to accept a fresh TOFU pairing
+    // (this node's own name/baseURL/publicKey/secretToken, the same shape
+    // sendHandshake() already POSTs) so a superadmin (or a one-off script
+    // acting on their behalf) can re-run that exact call directly against
+    // whichever peer still hasn't learned this node's current key, without
+    // ever touching .env by hand. publicKey is derived fresh from
+    // signingPrivateKey on every call (never cached) - cheap, and this
+    // avoids a second place that could drift from the key actually in use.
+    public function clusterIdentity(): ResponseInterface
+    {
+        if (! (auth()->user()?->inGroup('superadmin'))) {
+            return $this->response->setStatusCode(403)->setJSON(['ok' => false]);
+        }
+
+        $cluster = class_exists(\AdGo\Cluster\Cluster::class) ? new \AdGo\Cluster\Cluster() : null;
+
+        $publicKeyB64 = '';
+        $privateKeyB64 = $cluster?->signingPrivateKey() ?? '';
+        if ($privateKeyB64 !== '') {
+            $pem = base64_decode($privateKeyB64, true);
+            $key = $pem !== false ? openssl_pkey_get_private($pem) : false;
+            if ($key !== false) {
+                $details = openssl_pkey_get_details($key);
+                if (is_array($details) && isset($details['key'])) {
+                    $publicKeyB64 = base64_encode((string) $details['key']);
+                }
+            }
+        }
+
+        return $this->response->setJSON([
+            'name'        => $cluster?->thisNodeName() ?? '',
+            'baseURL'     => rtrim((string) config('App')->baseURL, '/'),
+            'secretToken' => $cluster?->secretToken() ?? '',
+            'publicKey'   => $publicKeyB64,
+        ]);
+    }
+
     // See index()'s own 'selfNode' docblock. DB password deliberately
     // omitted - unlike every other credential on this page, this one is
     // the app's OWN live production secret, not an admin-entered reference
