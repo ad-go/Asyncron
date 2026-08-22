@@ -77,11 +77,13 @@
     // Updates every [data-node][data-prop] field with whatever the server
     // currently has - EXCEPT the one field the admin is actively typing
     // into right now (document.activeElement), so a poll landing mid-edit
-    // never overwrites an unsaved keystroke. Rows/fields are updated in
-    // place, never added or removed - a node appearing/disappearing from
-    // the registry itself already reloads this page through the Import/
-    // Add-node/Delete-node flows settings.js already drives, so this poll
-    // deliberately stays narrower than that: existing rows only.
+    // never overwrites an unsaved keystroke. Fields are updated in place,
+    // never added or removed - a node appearing/disappearing from the
+    // registry is a structurally different change (a whole new/gone row,
+    // not just a value) and reloadIfNodeSetChanged() below already
+    // catches that separately, BEFORE this ever runs - see its own
+    // docblock. This function only ever runs against a node set that's
+    // already confirmed unchanged from what's currently rendered.
     function applyRows(rows) {
         var seenRows = {};
         table.querySelectorAll('[data-node][data-prop]').forEach(function (el) {
@@ -102,13 +104,51 @@
         });
     }
 
+    // Which nodes are CURRENTLY rendered, captured once at load and kept
+    // in sync with every reload this triggers below - deliberately not
+    // re-derived from the DOM on every poll (a node's OWN <tr> carries
+    // several [data-node] elements - name badge, node row fields,
+    // database row fields - re-scanning would just be re-deriving the
+    // same dedup work reloadIfNodeSetChanged() already does once here).
+    var knownNodeNames = [];
+    table.querySelectorAll('[data-node]').forEach(function (el) {
+        if (knownNodeNames.indexOf(el.dataset.node) === -1) knownNodeNames.push(el.dataset.node);
+    });
+    knownNodeNames.sort();
+
+    // The registry itself changing (a node added/removed) is a
+    // structural change - a whole new/gone <tr> pair, not just a value -
+    // that applyRows() above deliberately never attempts to replicate in
+    // JS (this table's real markup - rowspan pairs, family-specific
+    // field visibility, the delete icon, ...) - a full reload is what
+    // settings.js's own Import/Add-node/Delete-node handlers already do
+    // for exactly this reason when THIS tab drives the change; this
+    // extends that to changes arriving from elsewhere (another admin's
+    // tab, or the registry syncing in a peer's own change) instead of
+    // silently drifting out of sync until someone happens to refresh.
+    // Skipped for one poll (not indefinitely - the very next tick tries
+    // again) while the admin is actively focused inside this table, so a
+    // reload never discards an in-progress, unsaved edit.
+    function reloadIfNodeSetChanged(rows) {
+        var fresh = Object.keys(rows).sort();
+        var changed = fresh.length !== knownNodeNames.length || fresh.some(function (name, i) { return name !== knownNodeNames[i]; });
+        if (!changed) return false;
+        if (table.contains(document.activeElement)) return false;
+        location.reload();
+
+        return true;
+    }
+
     function poll() {
         fetch(statusUrl, { headers: { 'X-Requested-With': 'XMLHttpRequest' } })
             .then(function (r) { return r.ok ? r.json() : null; })
             .then(function (data) {
                 if (!data) return;
                 if (data.nodes) applyStatuses(data.nodes);
-                if (data.rows) applyRows(data.rows);
+                if (data.rows) {
+                    if (reloadIfNodeSetChanged(data.rows)) return;
+                    applyRows(data.rows);
+                }
             })
             .catch(function () { /* transient network hiccup - next poll retries */ });
     }

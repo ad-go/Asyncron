@@ -133,7 +133,12 @@ Everything below rides that same public-push / NAT-pull split:
   `public/assets/settings-node-status.js`). The color is a composite of four independent
   signals (`Cluster::peerHealthStatuses()`) - file sync, SSH reachability, DB sync, and
   stuck/failing queue jobs - so a peer with no file-sync attempt logged yet still shows red
-  when one of the other three has actually failed, rather than reading as merely idle.
+  when one of the other three has actually failed, rather than reading as merely idle. The
+  same 5s poll also updates the Cluster table's own field VALUES live (skipping whichever
+  field is actively focused, so a poll landing mid-edit never overwrites an unsaved
+  keystroke) and reloads the whole page if the node SET itself changes - a peer added or
+  removed from elsewhere (another admin's tab, or the registry syncing in a peer's own
+  change), not just through this tab's own Import/Add-node/Delete-node buttons.
 - **Restart cluster** - the same Node-status card's own icon button
   (`SettingsController::restartCluster()`) tests every known peer's file-sync AND database
   credentials in one click (public peers synchronously, NAT peers queued for their own next
