@@ -145,10 +145,17 @@ class LongPollController extends Controller
         // Bounded from the OUTSIDE too, not just via the child's own
         // -max-time - a child that ignores/mishandles that flag (a stuck
         // job, an unexpectedly slow environment) must never be able to
-        // block this request past its own budget. proc_terminate() is a
-        // SIGTERM, not a guaranteed-instant kill, but combined with the
-        // child's own -max-time this is enough to keep the worst case
-        // bounded to roughly QUEUE_BURST_MAX_SECONDS either way.
+        // block this request past its own budget. SIGKILL (9), not the
+        // default SIGTERM (15) - found live 2026-08-22 via
+        // SettingsController::runBoundedSpark(), the near-identical
+        // pattern this was copied from: a child stuck inside an
+        // uninterruptible blocking call (a slow SSH connect attempt mid-
+        // job, say) never even checks for a pending SIGTERM until that
+        // call returns, and proc_close() below BLOCKS until the child
+        // actually exits - so this "bounded" wait could silently run for
+        // however long that one blocking call takes, not
+        // QUEUE_BURST_MAX_SECONDS. SIGKILL can't be caught, blocked, or
+        // deferred by the child at all - the OS ends it immediately.
         $start = microtime(true);
         while (microtime(true) - $start < self::QUEUE_BURST_MAX_SECONDS + 1) {
             $status = proc_get_status($proc);
@@ -160,7 +167,7 @@ class LongPollController extends Controller
         if (is_resource($proc)) {
             $status = proc_get_status($proc);
             if ($status['running']) {
-                @proc_terminate($proc);
+                @proc_terminate($proc, 9);
             }
         }
         foreach ($pipes as $pipe) {

@@ -814,7 +814,18 @@ class SettingsController extends BaseController
         $timedOut = false;
         $status   = proc_get_status($proc);
         if ($status['running']) {
-            @proc_terminate($proc);
+            // SIGKILL (9), not the default SIGTERM (15) - found live
+            // 2026-08-22: a child stuck inside an uninterruptible blocking
+            // call (a slow SSH connect attempt from a queued
+            // cluster-ssh-connectivity-check job, say) never even checks
+            // for a pending SIGTERM until that call itself returns, and
+            // proc_close() below BLOCKS until the child actually exits -
+            // so a "bounded" 4s budget silently became a real 20+s wait
+            // once SIGTERM had to sit queued behind whatever the child was
+            // doing. SIGKILL can't be caught, blocked, or deferred by the
+            // child at all - the OS ends it immediately, which is what
+            // "bounded" actually needs to mean here.
+            @proc_terminate($proc, 9);
             $timedOut = true;
         }
         $output .= (string) stream_get_contents($pipes[1]);
