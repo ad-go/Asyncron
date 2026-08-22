@@ -315,6 +315,41 @@ class DbSyncSchema
     }
 
     /**
+     * Per-node on/off switch for the 'settings' table's own sync
+     * specifically - NOT $fileSyncEnabled/$sessionSyncEnabled's kind of
+     * .env-only flag (see Config\Cluster's own docblocks on why those
+     * stay .env-only: both are checked on every single web request,
+     * where a per-request Settings-table DB read would be real overhead).
+     * This one is only ever checked from cron-driven cluster:sync-db and
+     * the (infrequent, never per-page-load) incoming-command handlers, so
+     * a live Settings-panel checkbox is fine here - see
+     * SettingsController's own "Settings sync" toggle.
+     *
+     * Stored via the SAME Settings-package mechanism (and the SAME
+     * 'settings' table) the rest of this class already scans/syncs -
+     * scoped by $context = this node's own name (Config\Cluster::
+     * $thisNode), same convention Nodes.* / Databases.* already use, so
+     * each node's own on/off choice is independent and never collides
+     * with another node's. This one row DOES still sync normally like
+     * any other 'settings' row (harmless, even informative - a peer
+     * seeing "node X's own settingsSyncEnabled = false" under X's own
+     * context costs nothing and isn't acted on by anyone but X) - only
+     * the check below, always scoped to THIS node's own context, ever
+     * gates behavior.
+     *
+     * Unset (a fresh install, or a node that's never touched the
+     * checkbox) defaults to enabled - an opt-OUT, not opt-in, so normal
+     * behavior needs no action.
+     */
+    public static function settingsSyncEnabled(): bool
+    {
+        $thisNode = (string) config('Cluster')->thisNode;
+        $value    = service('settings')->get('Cluster.settingsSyncEnabled', $thisNode);
+
+        return $value === null || $value === '' || $value === '1';
+    }
+
+    /**
      * @return array{class: string, key: string, value: string, type: string, context: string, created_at?: string, updated_at?: string}|null
      */
     public static function exportSetting(ConnectionInterface $db, string $class, string $key, string $context): ?array
@@ -826,6 +861,15 @@ class DbSyncSchema
 
         if ($table === '' || $naturalKey === '') {
             return ['applied' => false, 'reason' => 'missing table/naturalKey'];
+        }
+
+        // Single choke point for BOTH incoming directions (push-in via
+        // Controllers\DbSyncController::receive(), pull-in via
+        // PullSync::applyDbRows()/SyncDbCommand::bootstrap()) - see
+        // settingsSyncEnabled()'s own docblock. Checked here, not per
+        // caller, so there's exactly one place this can ever be wrong.
+        if ($table === 'settings' && ! self::settingsSyncEnabled()) {
+            return ['applied' => false, 'reason' => 'settings sync disabled locally'];
         }
 
         $manifestKey = "$table:$naturalKey";

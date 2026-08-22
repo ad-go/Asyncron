@@ -42,6 +42,7 @@ return [
     'restartClusterButton' => 'Repornește cluster-ul - testează toate conexiunile, armonizează starea, repornește sincronizarea',
     'restartClusterDone' => 'Repornire finalizată: {0} nod(uri) testate ({1} ok, {2} în așteptare), sincronizare/armonizare pornite.',
     'restartClusterFailed' => 'Repornire eșuată: {0}',
+    'settingsSyncToggle' => 'Sincronizare setări cu celelalte noduri',
     'netTreeFiles' => 'Fișiere sincronizate',
     'netTreeSize' => 'Mărime',
     'netTreeTraffic' => 'Ultimul transfer',

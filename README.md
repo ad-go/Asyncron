@@ -149,6 +149,16 @@ Everything below rides that same public-push / NAT-pull split:
   archived version" button per row (`Dashboard::restoreConflict()`) that copies the archived
   losing bytes back over the current file and lets the next `cluster:sync-files` pass push that
   reversal out to every peer, same as any other local edit would.
+- **Per-node Settings-sync toggle** - the Node-status card's own "Settings sync with other
+  nodes" checkbox (`SettingsController::updateSettingsSync()`) turns the `settings` table's own
+  cluster sync off/on for THIS node specifically, both directions - `cluster:sync-db` stops
+  exporting local settings changes while off, and any incoming settings command (push or pull)
+  is ignored, all gated through one choke point (`DbSyncSchema::settingsSyncEnabled()`). Nothing
+  else - files, users, and any `dbSyncGroup`-discovered table keep syncing normally. A live
+  Settings-panel checkbox rather than a `.env` flag like `$fileSyncEnabled`/`$sessionSyncEnabled`
+  on purpose: unlike those two, this is only ever checked from the once-a-minute cron path and
+  incoming-sync handlers, never on every web request, so a DB read here costs nothing worth
+  avoiding.
 
 ## Not built yet
 

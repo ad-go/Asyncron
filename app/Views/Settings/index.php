@@ -88,6 +88,18 @@
                     </div>
                 <?php endforeach ?>
             </div>
+            <!-- Per-node on/off switch for the 'settings' table's own
+                 cluster sync specifically (files/users/other tables are
+                 untouched) - see DbSyncSchema::settingsSyncEnabled()'s own
+                 docblock for exactly what this gates, both directions. -->
+            <div class="card-footer">
+                <label class="form-check form-switch mb-0">
+                    <input class="form-check-input" type="checkbox" id="settings-sync-toggle"
+                           data-endpoint="<?= url_to('SettingsController::updateSettingsSync') ?>"
+                           <?= $settingsSyncEnabled ? 'checked' : '' ?>>
+                    <span class="form-check-label"><?= lang('App.settingsSyncToggle') ?></span>
+                </label>
+            </div>
         </div>
     </div>
     <?php endif ?>

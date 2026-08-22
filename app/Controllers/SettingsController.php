@@ -156,6 +156,14 @@ class SettingsController extends BaseController
             // below is what settings-node-status.js polls every 5s to keep
             // it live without a full page reload.
             'nodeHealth' => $cluster?->peerHealthStatuses() ?? [],
+            // The Node-status card's own "Settings sync" checkbox - see
+            // DbSyncSchema::settingsSyncEnabled()'s own docblock for what
+            // this actually gates (both directions of the 'settings'
+            // table's cluster sync, nothing else - files/users/other
+            // tables are untouched). Defaults true (enabled) when
+            // ad-go/cluster isn't installed at all, same "nothing to turn
+            // off" reasoning nodeHealth's own [] fallback above uses.
+            'settingsSyncEnabled' => class_exists(\AdGo\Cluster\DbSyncSchema::class) ? \AdGo\Cluster\DbSyncSchema::settingsSyncEnabled() : true,
         ] + $this->layoutData());
     }
 
@@ -227,6 +235,29 @@ class SettingsController extends BaseController
             'secretToken' => $cluster?->secretToken() ?? '',
             'publicKey'   => $publicKeyB64,
         ]);
+    }
+
+    // "Settings sync" checkbox on the Node-status card - see
+    // DbSyncSchema::settingsSyncEnabled()'s own docblock for exactly what
+    // this does and doesn't gate (only the 'settings' table's own cluster
+    // sync, both directions; files/users/other tables are untouched).
+    // Stored via the SAME Settings-package mechanism/table every other
+    // synced value already lives in, scoped to THIS node's own context so
+    // flipping it here can never affect any other node's own choice.
+    public function updateSettingsSync(): ResponseInterface
+    {
+        if (! (auth()->user()?->inGroup('superadmin'))) {
+            return $this->response->setStatusCode(403)->setJSON(['ok' => false]);
+        }
+        if (! class_exists(\AdGo\Cluster\Cluster::class)) {
+            return $this->response->setStatusCode(503)->setJSON(['ok' => false]);
+        }
+
+        $enabled  = $this->request->getPost('enabled') === '1';
+        $thisNode = (new \AdGo\Cluster\Cluster())->thisNodeName();
+        service('settings')->set('Cluster.settingsSyncEnabled', $enabled ? '1' : '0', $thisNode);
+
+        return $this->response->setJSON(['ok' => true, 'csrf' => $this->csrfPayload()]);
     }
 
     // See index()'s own 'selfNode' docblock. DB password deliberately

@@ -75,35 +75,42 @@ class SyncDbCommand extends BaseCommand
             $changed++;
         }
 
-        foreach (DbSyncSchema::exportAllSettingIds($db) as $id) {
-            $snapshot = DbSyncSchema::exportSetting($db, (string) $id['class'], (string) $id['key'], (string) $id['context']);
-            if ($snapshot === null) {
-                continue;
-            }
-            $hash = DbSyncSchema::hashSettingSnapshot($snapshot);
-            // Bare "class:key:context" - NOT prefixed with the table name.
-            // enqueueToEveryPeer() below sends this as the wire naturalKey,
-            // and the receiving end's applyIncomingCommand() rebuilds its
-            // OWN manifest key as "$table:$naturalKey" - passing the
-            // already-prefixed $manifestKey here (found live 2026-08-21)
-            // double-prefixed it on arrival ("settings:settings:..."),
-            // permanently desyncing sender/receiver manifest keys for the
-            // same entity and causing every receiving node to treat what
-            // it just received as a brand-new local change on its own next
-            // scan, forever re-broadcasting it cluster-wide. $key (below)
-            // stays prefixed - that one's only ever used for THIS node's
-            // own manifest lookups, same as the users loop above.
-            $naturalKey = $id['class'] . ':' . $id['key'] . ':' . $id['context'];
-            $key        = 'settings:' . $naturalKey;
-            $known = $manifest->get($key);
-            if ($known !== null && $known['hash'] === $hash) {
-                continue;
-            }
+        // Gated on the same per-node toggle applyIncomingCommand() checks
+        // for the receiving side - see DbSyncSchema::settingsSyncEnabled()'s
+        // own docblock. Skips the WHOLE loop, not just the enqueue call,
+        // so a disabled node doesn't even pay for the export/hash/manifest
+        // work on every settings row every minute while turned off.
+        if (DbSyncSchema::settingsSyncEnabled()) {
+            foreach (DbSyncSchema::exportAllSettingIds($db) as $id) {
+                $snapshot = DbSyncSchema::exportSetting($db, (string) $id['class'], (string) $id['key'], (string) $id['context']);
+                if ($snapshot === null) {
+                    continue;
+                }
+                $hash = DbSyncSchema::hashSettingSnapshot($snapshot);
+                // Bare "class:key:context" - NOT prefixed with the table name.
+                // enqueueToEveryPeer() below sends this as the wire naturalKey,
+                // and the receiving end's applyIncomingCommand() rebuilds its
+                // OWN manifest key as "$table:$naturalKey" - passing the
+                // already-prefixed $manifestKey here (found live 2026-08-21)
+                // double-prefixed it on arrival ("settings:settings:..."),
+                // permanently desyncing sender/receiver manifest keys for the
+                // same entity and causing every receiving node to treat what
+                // it just received as a brand-new local change on its own next
+                // scan, forever re-broadcasting it cluster-wide. $key (below)
+                // stays prefixed - that one's only ever used for THIS node's
+                // own manifest lookups, same as the users loop above.
+                $naturalKey = $id['class'] . ':' . $id['key'] . ':' . $id['context'];
+                $key        = 'settings:' . $naturalKey;
+                $known = $manifest->get($key);
+                if ($known !== null && $known['hash'] === $hash) {
+                    continue;
+                }
 
-            $timestamp = $this->rowTimestamp($snapshot['updated_at'] ?? null);
-            $manifest->record($key, ['hash' => $hash, 'timestamp' => $timestamp]);
-            $this->enqueueToEveryPeer($config, $peers, 'settings', $naturalKey, $snapshot, $timestamp);
-            $changed++;
+                $timestamp = $this->rowTimestamp($snapshot['updated_at'] ?? null);
+                $manifest->record($key, ['hash' => $hash, 'timestamp' => $timestamp]);
+                $this->enqueueToEveryPeer($config, $peers, 'settings', $naturalKey, $snapshot, $timestamp);
+                $changed++;
+            }
         }
 
         // Config\Cluster::$dbSyncGroup - every table DbSyncSchema::

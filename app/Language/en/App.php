@@ -42,6 +42,7 @@ return [
     'restartClusterButton' => 'Restart cluster - test every connection, harmonize state, restart sync',
     'restartClusterDone' => 'Restart done: {0} peer(s) tested ({1} ok, {2} pending), sync/realign kicked off.',
     'restartClusterFailed' => 'Restart failed: {0}',
+    'settingsSyncToggle' => 'Settings sync with other nodes',
     'netTreeFiles' => 'Files synced',
     'netTreeSize' => 'Size',
     'netTreeTraffic' => 'Last transfer',
