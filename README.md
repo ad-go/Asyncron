@@ -11,6 +11,18 @@ separate packages, so there's nothing to require, trust, or version-pin afterwar
 
 *Unofficial - not affiliated with, or endorsed by, the CodeIgniter Foundation.*
 
+## Screenshots
+
+| Login | Dashboard |
+| :---: | :---: |
+| [![Login](docs/screenshots/login.jpg)](docs/screenshots/login.jpg) | [![Dashboard](docs/screenshots/dashboard.jpg)](docs/screenshots/dashboard.jpg) |
+| **Users** | **Settings** |
+| [![Users](docs/screenshots/users.jpg)](docs/screenshots/users.jpg) | [![Settings](docs/screenshots/settings.jpg)](docs/screenshots/settings.jpg) |
+
+(The Settings screenshot above has its node hostnames/usernames replaced with placeholders - the
+real cluster this repo's own demo runs on isn't something to publish recon details about, even
+with passwords already masked.)
+
 ## Install
 
 ```console
