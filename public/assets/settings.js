@@ -640,11 +640,12 @@
 
     function pwModal() { return window.bootstrap ? bootstrap.Modal.getOrCreateInstance(pwModalEl) : null; }
 
-    // Resolves with the typed password, or rejects with an Error whose
-    // .message is 'cancelled' when the user backs out - callers treat that
-    // one rejection reason as "do nothing", every other one as a real
-    // failure worth surfacing.
-    function askPassword(title, hint, confirmLabel) {
+    // Resolves with the typed password (possibly '' when required is
+    // false - see the Export button's own call below), or rejects with an
+    // Error whose .message is 'cancelled' when the user backs out -
+    // callers treat that one rejection reason as "do nothing", every
+    // other one as a real failure worth surfacing.
+    function askPassword(title, hint, confirmLabel, required) {
         return new Promise(function (resolve, reject) {
             if (!pwModalEl || !pwInput) { reject(new Error('no-modal')); return; }
             pwTitleEl.textContent = title;
@@ -655,7 +656,7 @@
 
             function onConfirm() {
                 var val = pwInput.value;
-                if (!val) {
+                if (!val && required) {
                     pwError.textContent = pwStrings.required || '';
                     pwError.classList.remove('d-none');
                     return;
@@ -721,9 +722,12 @@
     }
 
     // Export button (see app/Views/Settings/index.php - shared toolbar
-    // above the Nodes table). Always asks for a password first -
-    // exportSettings() refuses an empty one - then POSTs it and downloads
-    // whatever comes back, already encrypted.
+    // above the Nodes table). Always shows the password prompt, but the
+    // field itself is optional (askPassword()'s own 'required' arg is
+    // false here) - leaving it blank downloads the plain, unencrypted
+    // payload, same as before encryption existed at all; typing one
+    // downloads the encrypted envelope instead. Either way, whatever
+    // exportSettings() sends back is what gets downloaded as-is.
     var exportBox = document.getElementById('settings-export-import');
     var exportBtn = document.getElementById('settings-export-btn');
     if (exportBox && exportBtn) {
@@ -731,7 +735,7 @@
         var exportError = document.getElementById('settings-import-error');
 
         exportBtn.addEventListener('click', function () {
-            askPassword(pwStrings.exportTitle, pwStrings.exportHint, pwStrings.exportConfirm)
+            askPassword(pwStrings.exportTitle, pwStrings.exportHint, pwStrings.exportConfirm, false)
                 .then(function (password) {
                     return fetchWithCsrfRetry(exportEndpoint, function () {
                         var body = new URLSearchParams();
@@ -784,7 +788,7 @@
             peekEncrypted(pickedFile)
                 .then(function (encrypted) {
                     return encrypted
-                        ? askPassword(pwStrings.importTitle, pwStrings.importHint, pwStrings.importConfirm)
+                        ? askPassword(pwStrings.importTitle, pwStrings.importHint, pwStrings.importConfirm, true)
                         : '';
                 })
                 .then(function (password) {
@@ -848,7 +852,7 @@
             peekEncrypted(pickedFile)
                 .then(function (encrypted) {
                     return encrypted
-                        ? askPassword(pwStrings.importTitle, pwStrings.importHint, pwStrings.importConfirm)
+                        ? askPassword(pwStrings.importTitle, pwStrings.importHint, pwStrings.importConfirm, true)
                         : '';
                 })
                 .then(function (password) {

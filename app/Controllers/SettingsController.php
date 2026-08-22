@@ -1043,15 +1043,21 @@ class SettingsController extends BaseController
     // PORTABLE copy of it, meant to be moved around (downloaded, emailed,
     // dropped on a shared drive) - unlike the on-screen table, that copy
     // can't rely on "only a logged-in superadmin can see this page" for
-    // protection. So it's always encrypted (see encryptExportPayload())
-    // with a password typed in at export time (never stored anywhere -
-    // settings.js's own password modal, not a regular autosave field);
-    // POST, not the old GET-download link, so that password never lands in
-    // a URL, browser history, or an access log. The response is JSON
-    // (envelope + a suggested filename), not a raw file body with a
-    // Content-Disposition header like before - a fetch() POST can't trigger
-    // a browser "Save As" on its own, so settings.js builds the download
-    // client-side from this response instead.
+    // protection. Encrypted (see encryptExportPayload()) whenever a
+    // password is typed in at export time (never stored anywhere -
+    // settings.js's own password modal, not a regular autosave field) -
+    // but that field is OPTIONAL, not required: leaving it blank exports
+    // the plain payload as-is, same as before encryption existed at all
+    // (per an explicit 2026-08-22 request - a superadmin who already
+    // trusts wherever this file is going, or just wants a quick look at
+    // what it contains, shouldn't be forced through a password prompt
+    // either way). POST, not the old GET-download link, so a typed
+    // password never lands in a URL, browser history, or an access log
+    // even when one IS used. The response is JSON (envelope + a suggested
+    // filename), not a raw file body with a Content-Disposition header
+    // like before - a fetch() POST can't trigger a browser "Save As" on
+    // its own, so settings.js builds the download client-side from this
+    // response instead.
     public function exportSettings(): ResponseInterface
     {
         if (! (auth()->user()?->inGroup('superadmin'))) {
@@ -1059,9 +1065,6 @@ class SettingsController extends BaseController
         }
 
         $password = (string) $this->request->getPost('password');
-        if ($password === '') {
-            return $this->response->setStatusCode(422)->setJSON(['ok' => false, 'error' => lang('App.exportPasswordRequired')]);
-        }
 
         $cluster = class_exists(\AdGo\Cluster\Cluster::class) ? new \AdGo\Cluster\Cluster() : null;
         $host    = $cluster?->thisNodeName() ?: (gethostname() ?: 'node');
@@ -1097,7 +1100,7 @@ class SettingsController extends BaseController
             'ok'       => true,
             'csrf'     => $this->csrfPayload(),
             'filename' => $filename,
-            'envelope' => $this->encryptExportPayload($payload, $password),
+            'envelope' => $password !== '' ? $this->encryptExportPayload($payload, $password) : $payload,
         ]);
     }
 
