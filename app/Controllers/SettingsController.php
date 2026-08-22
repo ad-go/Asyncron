@@ -697,25 +697,37 @@ class SettingsController extends BaseController
         $cluster  = new \AdGo\Cluster\Cluster();
         $thisNode = $cluster->thisNodeName();
 
+        // Own try/catch per peer, deliberately - same "one peer's own
+        // failure must never count against any other peer" isolation
+        // PullCommand::pass() already uses. Found live 2026-08-22: without
+        // this, one NAT peer whose RemoteTestQueue::enqueue() throws (a
+        // permission-denied write - see that class's own docblock on the
+        // fix already applied there, this is the belt-and-braces half)
+        // crashed the ENTIRE restart, including the sync/realign steps
+        // for every OTHER peer that would otherwise have worked fine.
         $tested = [];
         foreach ($cluster->allNodes() as $name => $node) {
             if ($name === $thisNode) {
                 continue;
             }
 
-            $params = ['kind' => 'combined', 'node' => $this->nodeTestParams($name), 'database' => $this->databaseTestParams($name)];
+            try {
+                $params = ['kind' => 'combined', 'node' => $this->nodeTestParams($name), 'database' => $this->databaseTestParams($name)];
 
-            if (($node['type'] ?? '') === 'public') {
-                $result          = $this->localizeTestResult($this->callRemoteTest($cluster, (string) $node['baseURL'], $params, self::RESTART_PEER_TEST_TIMEOUT));
-                $tested[$name]   = ['pending' => false, 'ok' => (bool) ($result['node']['ok'] ?? false) && (bool) ($result['database']['ok'] ?? false)];
-                continue;
-            }
+                if (($node['type'] ?? '') === 'public') {
+                    $result        = $this->localizeTestResult($this->callRemoteTest($cluster, (string) $node['baseURL'], $params, self::RESTART_PEER_TEST_TIMEOUT));
+                    $tested[$name] = ['pending' => false, 'ok' => (bool) ($result['node']['ok'] ?? false) && (bool) ($result['database']['ok'] ?? false)];
+                    continue;
+                }
 
-            $requestId = bin2hex(random_bytes(16));
-            if (class_exists(\AdGo\Cluster\RemoteTestQueue::class)) {
-                (new \AdGo\Cluster\RemoteTestQueue())->enqueue($name, $requestId, $params);
+                $requestId = bin2hex(random_bytes(16));
+                if (class_exists(\AdGo\Cluster\RemoteTestQueue::class)) {
+                    (new \AdGo\Cluster\RemoteTestQueue())->enqueue($name, $requestId, $params);
+                }
+                $tested[$name] = ['pending' => true, 'requestId' => $requestId];
+            } catch (\Throwable $e) {
+                $tested[$name] = ['pending' => false, 'ok' => false, 'error' => $e->getMessage()];
             }
-            $tested[$name] = ['pending' => true, 'requestId' => $requestId];
         }
 
         $marker = $this->writeRestartMarkerFile($cluster, $thisNode);

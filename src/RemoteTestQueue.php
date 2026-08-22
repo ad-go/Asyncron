@@ -120,11 +120,24 @@ class RemoteTestQueue
     {
         $path = $this->path();
         $dir  = dirname($path);
-        if (! is_dir($dir) && ! mkdir($dir, 0775, true) && ! is_dir($dir)) {
+        if (! is_dir($dir) && ! @mkdir($dir, 0775, true) && ! is_dir($dir)) {
             return; // best-effort - a queue write failing must never break the actual test request/response
         }
 
-        $handle = fopen($path, 'cb+');
+        // @ is load-bearing, not decorative - found live 2026-08-22: a
+        // directory that exists but isn't writable by THIS PHP process
+        // (see deploy_env_write_permissions - SSH login user vs PHP-FPM
+        // user can differ) makes a bare fopen() raise an E_WARNING that
+        // CI4's own error handler escalates to an uncaught ErrorException,
+        // crashing the whole request (a 500 with an EMPTY body, since the
+        // exception fires mid-response) - straight through the
+        // "$handle === false" guard below, which never gets the chance to
+        // run. Every other caller (dispatchTest()'s own NAT-enqueue path,
+        // SettingsController::restartCluster()'s per-peer loop) inherited
+        // that crash for free, despite this method's own "must never
+        // break the actual test request/response" promise never actually
+        // holding without this.
+        $handle = @fopen($path, 'cb+');
         if ($handle === false) {
             return;
         }
@@ -158,7 +171,7 @@ class RemoteTestQueue
             return ['pending' => [], 'results' => []];
         }
 
-        $handle = fopen($path, 'rb');
+        $handle = @fopen($path, 'rb');
         if ($handle === false) {
             return ['pending' => [], 'results' => []];
         }

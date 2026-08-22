@@ -147,12 +147,32 @@
             var body = new URLSearchParams();
             if (window.CI4_CSRF) body.set(window.CI4_CSRF.name, window.CI4_CSRF.hash);
 
+            // Reads the body as TEXT first, not straight r.json() - found
+            // live 2026-08-22: a server-side crash (an uncaught exception
+            // mid-response - see SettingsController::restartCluster()'s
+            // own per-peer try/catch, added for exactly this) can come
+            // back as a 500 with an EMPTY body, which r.json() rejects
+            // with its own parse error, landing in .catch() below with no
+            // detail at all ("Restart failed: " and nothing after the
+            // colon - not useful). Falling back to the HTTP status code
+            // when the body isn't valid JSON means there's always SOME
+            // concrete detail to show, even for a failure mode this
+            // client-side code was never told about.
             fetch(restartEndpoint, { method: 'POST', body: body, headers: { 'X-Requested-With': 'XMLHttpRequest' } })
-                .then(function (r) { return r.json(); })
-                .then(function (data) {
-                    if (window.syncCsrf) window.syncCsrf(data);
+                .then(function (r) {
+                    return r.text().then(function (text) {
+                        var data = null;
+                        try { data = JSON.parse(text); } catch (e) { /* handled via the null fallback below */ }
+
+                        return { status: r.status, data: data };
+                    });
+                })
+                .then(function (result) {
+                    var data = result.data;
+                    if (window.syncCsrf && data) window.syncCsrf(data);
                     if (!data || !data.ok) {
-                        showRestartResult((restartStrings.failed || '{0}').replace('{0}', (data && data.error) || ''), true);
+                        var detail = (data && data.error) || ('HTTP ' + result.status);
+                        showRestartResult((restartStrings.failed || '{0}').replace('{0}', detail), true);
 
                         return;
                     }
@@ -165,8 +185,8 @@
                         .replace('{2}', pending);
                     showRestartResult(msg, false);
                 })
-                .catch(function () {
-                    showRestartResult((restartStrings.failed || '{0}').replace('{0}', ''), true);
+                .catch(function (e) {
+                    showRestartResult((restartStrings.failed || '{0}').replace('{0}', (e && e.message) || ''), true);
                 })
                 .finally(function () {
                     restartBtn.classList.remove('disabled');
