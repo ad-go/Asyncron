@@ -1761,11 +1761,41 @@ class SettingsController extends BaseController
     // side instead of the installer. $value is used AS-IS - already fully
     // formatted/quoted by the caller if it needs to be; this has no opinion
     // on quoting, only on finding-or-appending the right line per key.
+    //
+    // flock()'d - found live 2026-08-22: two concurrent requests writing
+    // cluster.nodes (a browser-triggered handshake and an incoming peer's
+    // own clusterHandshake() call, say - both real, both legitimate, nothing
+    // wrong with either on its own) raced on a bare file_get_contents()/
+    // file_put_contents() pair with no lock between them - whichever
+    // finished LAST silently won, discarding the other's write in full
+    // (not just its own key - the WHOLE file content, since both read
+    // stale copies of each other). That's exactly the "already paired"-
+    // but-still-403 pattern seen repeatedly this session: node A learns
+    // node B's new key, then a second concurrent write on A reverts .env
+    // to a snapshot from before that line landed. Every OTHER state file
+    // in this project (src/*.php - Stats, SyncState, the manifest, ...)
+    // already uses fopen()+flock(LOCK_EX) for exactly this reason; .env
+    // just never had the same treatment since writeEnvLines() started
+    // life as a single-caller, single-key helper before cluster identity
+    // started writing it from multiple concurrent request paths.
     private function writeEnvLines(array $lines): bool
     {
         $envPath = ROOTPATH . '.env';
-        $env     = @file_get_contents($envPath);
+        $handle  = @fopen($envPath, 'r+');
+        if ($handle === false) {
+            return false;
+        }
+        if (! flock($handle, LOCK_EX)) {
+            fclose($handle);
+
+            return false;
+        }
+
+        $env = stream_get_contents($handle);
         if ($env === false) {
+            flock($handle, LOCK_UN);
+            fclose($handle);
+
             return false;
         }
 
@@ -1777,7 +1807,14 @@ class SettingsController extends BaseController
                 : rtrim($env) . "\n" . $line . "\n";
         }
 
-        return file_put_contents($envPath, $env) !== false;
+        rewind($handle);
+        ftruncate($handle, 0);
+        $ok = fwrite($handle, $env) !== false;
+        fflush($handle);
+        flock($handle, LOCK_UN);
+        fclose($handle);
+
+        return $ok;
     }
 
     // "Add node" - the two-row block at the end of the Cluster table (see
