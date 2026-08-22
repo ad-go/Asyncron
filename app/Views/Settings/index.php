@@ -110,7 +110,7 @@
                      data-import-strings="<?= esc(json_encode(['success' => lang('App.importSuccess'), 'failed' => lang('App.importFailed')]), 'attr') ?>"
                      data-reset-endpoint="<?= url_to('SettingsController::resetCluster') ?>">
                     <?php if ($clusterFunctional) : ?>
-                    <a class="btn btn-sm btn-outline-primary me-2" href="<?= url_to('SettingsController::exportSettings') ?>"><?= lang('App.exportButton') ?></a>
+                    <button type="button" class="btn btn-sm btn-outline-primary me-2" id="settings-export-btn"><?= lang('App.exportButton') ?></button>
                     <?php endif ?>
                     <?php if ($nodes === []) : ?>
                     <span id="settings-cluster-import"
@@ -465,6 +465,41 @@
     </div>
 </div>
 <?php endif ?>
+<!-- Shared password prompt for both Export (encryptExportPayload()) and
+     Import (decryptExportEnvelope()) - one modal, settings.js retitles/
+     retargets it per use rather than duplicating this markup 3 times
+     (regular Export, regular Import, bootstrap Import cluster). Always
+     rendered (not gated on $clusterFunctional/$nodes like the modals
+     above) since the bootstrap "Import cluster" button - the ONE way in
+     while $nodes is still empty - needs it too, the moment the picked
+     file turns out to be encrypted. -->
+<div class="modal modal-blur fade" id="crypto-password-modal"
+     data-strings="<?= esc(json_encode([
+         'required'      => lang('App.cryptoPasswordRequired'),
+         'exportTitle'   => lang('App.exportPasswordModalTitle'),
+         'exportHint'    => lang('App.exportPasswordHint'),
+         'exportConfirm' => lang('App.exportButton'),
+         'importTitle'   => lang('App.importPasswordModalTitle'),
+         'importHint'    => lang('App.importPasswordHint'),
+         'importConfirm' => lang('App.importButton'),
+         'networkError'  => lang('App.saveFailedNetwork'),
+     ]), 'attr') ?>">
+    <div class="modal-dialog modal-dialog-centered modal-sm">
+        <div class="modal-content">
+            <div class="modal-header"><h5 class="modal-title" id="crypto-password-modal-title"></h5>
+                <button type="button" class="btn-close" id="crypto-password-modal-close"></button></div>
+            <div class="modal-body">
+                <p class="text-muted small" id="crypto-password-modal-hint"></p>
+                <input type="password" class="form-control" id="crypto-password-input" placeholder="<?= esc(lang('App.cryptoPasswordPlaceholder')) ?>" autocomplete="off">
+                <div class="text-red small mt-2 d-none" id="crypto-password-modal-error"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn" id="crypto-password-modal-cancel"><?= lang('App.cancel') ?></button>
+                <button class="btn btn-primary" id="crypto-password-modal-confirm"></button>
+            </div>
+        </div>
+    </div>
+</div>
 <script src="<?= base_url('assets/settings.js') ?>" defer></script>
 <?php if ($nodes !== []) : ?>
 <script src="<?= base_url('assets/settings-node-status.js') ?>" defer></script>

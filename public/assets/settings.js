@@ -619,6 +619,145 @@
         });
     }
 
+    // Shared password prompt (see app/Views/Settings/index.php's
+    // #crypto-password-modal) backing BOTH Export (always asks - every
+    // export is encrypted, see SettingsController::encryptExportPayload())
+    // and Import (asks ONLY when the picked file turns out to already be
+    // "encrypted": true - peekEncrypted() below reads that flag straight
+    // out of the file client-side before ever uploading it, so a plain
+    // unencrypted file - e.g. this project's own asyncron.nodes.json -
+    // still imports with zero extra clicks like it always did). One modal,
+    // retitled per call, instead of three near-identical copies.
+    var pwModalEl = document.getElementById('crypto-password-modal');
+    var pwStrings = pwModalEl ? JSON.parse(pwModalEl.dataset.strings || '{}') : {};
+    var pwTitleEl = document.getElementById('crypto-password-modal-title');
+    var pwHintEl = document.getElementById('crypto-password-modal-hint');
+    var pwInput = document.getElementById('crypto-password-input');
+    var pwError = document.getElementById('crypto-password-modal-error');
+    var pwConfirmBtn = document.getElementById('crypto-password-modal-confirm');
+    var pwCancelBtn = document.getElementById('crypto-password-modal-cancel');
+    var pwCloseBtn = document.getElementById('crypto-password-modal-close');
+
+    function pwModal() { return window.bootstrap ? bootstrap.Modal.getOrCreateInstance(pwModalEl) : null; }
+
+    // Resolves with the typed password, or rejects with an Error whose
+    // .message is 'cancelled' when the user backs out - callers treat that
+    // one rejection reason as "do nothing", every other one as a real
+    // failure worth surfacing.
+    function askPassword(title, hint, confirmLabel) {
+        return new Promise(function (resolve, reject) {
+            if (!pwModalEl || !pwInput) { reject(new Error('no-modal')); return; }
+            pwTitleEl.textContent = title;
+            pwHintEl.textContent = hint;
+            pwConfirmBtn.textContent = confirmLabel;
+            pwInput.value = '';
+            pwError.classList.add('d-none');
+
+            function onConfirm() {
+                var val = pwInput.value;
+                if (!val) {
+                    pwError.textContent = pwStrings.required || '';
+                    pwError.classList.remove('d-none');
+                    return;
+                }
+                cleanup();
+                var m = pwModal();
+                if (m) m.hide();
+                resolve(val);
+            }
+            function onCancel() {
+                cleanup();
+                var m = pwModal();
+                if (m) m.hide();
+                reject(new Error('cancelled'));
+            }
+            function onKeydown(e) { if (e.key === 'Enter') onConfirm(); }
+            function cleanup() {
+                pwConfirmBtn.removeEventListener('click', onConfirm);
+                pwCancelBtn.removeEventListener('click', onCancel);
+                pwCloseBtn.removeEventListener('click', onCancel);
+                pwInput.removeEventListener('keydown', onKeydown);
+            }
+            pwConfirmBtn.addEventListener('click', onConfirm);
+            pwCancelBtn.addEventListener('click', onCancel);
+            pwCloseBtn.addEventListener('click', onCancel);
+            pwInput.addEventListener('keydown', onKeydown);
+
+            var m = pwModal();
+            if (m) m.show();
+            setTimeout(function () { pwInput.focus(); }, 300);
+        });
+    }
+
+    // Reads a picked File client-side (no upload yet) just far enough to
+    // know whether it's one of encryptExportPayload()'s envelopes - lets
+    // the Import handlers below skip the password prompt entirely for a
+    // plain file, and ask BEFORE spending a round trip on a file the
+    // server would otherwise reject for lack of a password.
+    function peekEncrypted(file) {
+        return file.text().then(function (text) {
+            try {
+                var decoded = JSON.parse(text);
+                return !!(decoded && decoded.encrypted === true);
+            } catch (e) {
+                return false;
+            }
+        }).catch(function () { return false; });
+    }
+
+    // Export's own response is JSON (envelope + filename), not a raw file
+    // body with Content-Disposition like the old GET-download link used -
+    // a fetch() POST can't trigger a browser "Save As" by itself, so this
+    // builds the download client-side via an object URL and a synthetic,
+    // never-appended-to-view <a download> click.
+    function downloadJson(filename, obj) {
+        var blob = new Blob([JSON.stringify(obj, null, 2)], { type: 'application/json' });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        a.click();
+        setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+    }
+
+    // Export button (see app/Views/Settings/index.php - shared toolbar
+    // above the Nodes table). Always asks for a password first -
+    // exportSettings() refuses an empty one - then POSTs it and downloads
+    // whatever comes back, already encrypted.
+    var exportBox = document.getElementById('settings-export-import');
+    var exportBtn = document.getElementById('settings-export-btn');
+    if (exportBox && exportBtn) {
+        var exportEndpoint = exportBox.dataset.exportEndpoint;
+        var exportError = document.getElementById('settings-import-error');
+
+        exportBtn.addEventListener('click', function () {
+            askPassword(pwStrings.exportTitle, pwStrings.exportHint, pwStrings.exportConfirm)
+                .then(function (password) {
+                    return fetchWithCsrfRetry(exportEndpoint, function () {
+                        var body = new URLSearchParams();
+                        body.set('password', password);
+                        if (window.CI4_CSRF) body.set(window.CI4_CSRF.name, window.CI4_CSRF.hash);
+                        return body;
+                    });
+                })
+                .then(function (result) {
+                    window.syncCsrf(result.data);
+                    if (result.ok && result.data && result.data.ok) {
+                        downloadJson(result.data.filename, result.data.envelope);
+                        return;
+                    }
+                    var msg = (result.data && result.data.error) ? result.data.error : '';
+                    exportError.textContent = msg;
+                    exportError.classList.remove('d-none');
+                })
+                .catch(function (e) {
+                    if (e && e.message === 'cancelled') return;
+                    exportError.textContent = pwStrings.networkError || '';
+                    exportError.classList.remove('d-none');
+                });
+        });
+    }
+
     // Import button (see app/Views/Settings/index.php - shared toolbar
     // above the Nodes table, covers both Nodes and Databases). The file
     // input's own 'change' event does the picking; clicking the visible
@@ -642,12 +781,21 @@
             if (!importInput.files[0]) return;
             importError.classList.add('d-none');
             var pickedFile = importInput.files[0];
-            fetchWithCsrfRetry(importEndpoint, function () {
-                var fd = new FormData();
-                fd.append('file', pickedFile);
-                if (window.CI4_CSRF) fd.append(window.CI4_CSRF.name, window.CI4_CSRF.hash);
-                return fd;
-            })
+            peekEncrypted(pickedFile)
+                .then(function (encrypted) {
+                    return encrypted
+                        ? askPassword(pwStrings.importTitle, pwStrings.importHint, pwStrings.importConfirm)
+                        : '';
+                })
+                .then(function (password) {
+                    return fetchWithCsrfRetry(importEndpoint, function () {
+                        var fd = new FormData();
+                        fd.append('file', pickedFile);
+                        if (password) fd.append('password', password);
+                        if (window.CI4_CSRF) fd.append(window.CI4_CSRF.name, window.CI4_CSRF.hash);
+                        return fd;
+                    });
+                })
                 .then(function (result) {
                     window.syncCsrf(result.data);
                     if (result.ok && result.data && result.data.ok) {
@@ -664,7 +812,8 @@
                     importError.textContent = importStrings.failed ? importStrings.failed.replace('{0}', msg) : msg;
                     importError.classList.remove('d-none');
                 })
-                .catch(function () {
+                .catch(function (e) {
+                    if (e && e.message === 'cancelled') return;
                     importError.textContent = importStrings.failed ? importStrings.failed.replace('{0}', '') : '';
                     importError.classList.remove('d-none');
                 })
@@ -696,12 +845,21 @@
             if (!clusterImportInput.files[0]) return;
             clusterImportError.classList.add('d-none');
             var pickedFile = clusterImportInput.files[0];
-            fetchWithCsrfRetry(clusterImportEndpoint, function () {
-                var fd = new FormData();
-                fd.append('file', pickedFile);
-                if (window.CI4_CSRF) fd.append(window.CI4_CSRF.name, window.CI4_CSRF.hash);
-                return fd;
-            })
+            peekEncrypted(pickedFile)
+                .then(function (encrypted) {
+                    return encrypted
+                        ? askPassword(pwStrings.importTitle, pwStrings.importHint, pwStrings.importConfirm)
+                        : '';
+                })
+                .then(function (password) {
+                    return fetchWithCsrfRetry(clusterImportEndpoint, function () {
+                        var fd = new FormData();
+                        fd.append('file', pickedFile);
+                        if (password) fd.append('password', password);
+                        if (window.CI4_CSRF) fd.append(window.CI4_CSRF.name, window.CI4_CSRF.hash);
+                        return fd;
+                    });
+                })
                 .then(function (result) {
                     window.syncCsrf(result.data);
                     if (result.ok && result.data && result.data.ok) {
@@ -713,7 +871,8 @@
                     clusterImportError.textContent = clusterImportStrings.failed ? clusterImportStrings.failed.replace('{0}', msg) : msg;
                     clusterImportError.classList.remove('d-none');
                 })
-                .catch(function () {
+                .catch(function (e) {
+                    if (e && e.message === 'cancelled') return;
                     clusterImportError.textContent = clusterImportStrings.failed ? clusterImportStrings.failed.replace('{0}', '') : '';
                     clusterImportError.classList.remove('d-none');
                 })

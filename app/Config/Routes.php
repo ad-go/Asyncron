@@ -35,7 +35,7 @@ $routes->get('settings/node-status', 'SettingsController::nodeStatus', ['filter'
 $routes->post('settings/databases', 'SettingsController::updateDatabase', ['filter' => 'session']);
 $routes->post('settings/logo', 'SettingsController::uploadLogo', ['filter' => 'session']);
 $routes->post('settings/logo/delete', 'SettingsController::deleteLogo', ['filter' => 'session']);
-$routes->get('settings/export', 'SettingsController::exportSettings', ['filter' => 'session']);
+$routes->post('settings/export', 'SettingsController::exportSettings', ['filter' => 'session']);
 $routes->post('settings/import', 'SettingsController::importSettings', ['filter' => 'session']);
 $routes->post('settings/cluster-import', 'SettingsController::importCluster', ['filter' => 'session']);
 $routes->post('settings/nodes/add', 'SettingsController::addNode', ['filter' => 'session']);
