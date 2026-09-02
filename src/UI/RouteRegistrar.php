@@ -66,6 +66,62 @@ class RouteRegistrar
         // added too (it isn't a member of its own $nodes, which holds
         // PEERS only) so the picker's list stays complete even starting
         // from a single node.
+        // Unauthenticated, same reasoning as healthz above, plus a
+        // structural one specific to this route: fixing a wrong
+        // app.baseURL currently means redeploying install.php, which on
+        // at least one real node (h1q) can only ever land in public/ by
+        // renaming the existing directory aside first (see install.ps1's
+        // own Send-SshFiles comment on the ownership split that forces
+        // this) - safe only immediately before a full wipe+reinstall
+        // rebuilds public/ anyway, actively destructive against a node
+        // that's already serving correctly and just has a stale baseURL
+        // (found live 2026-09-02: doing exactly that turned a working
+        // node briefly unreachable for no reason). Reachable through the
+        // app's OWN already-deployed public/index.php instead, this needs
+        // no separate deploy step at all - just requesting the URL fixes
+        // it, on any node, any time. Derives baseURL from the CURRENT
+        // request the exact same way install.php's own asyncronDetectBaseUrl()
+        // does (Host header + scheme, X-Forwarded-Proto override) -
+        // trusting the Host header is an existing, already-accepted
+        // precedent here, not a new exposure this route introduces.
+        $routes->get('fix-baseurl', static function () {
+            $host = $_SERVER['HTTP_HOST'] ?? '';
+            if ($host === '') {
+                return service('response')->setStatusCode(400)->setBody('No Host header on this request - cannot derive a baseURL.');
+            }
+
+            $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
+            if (!empty($_SERVER['HTTP_X_FORWARDED_PROTO'])) {
+                $scheme = strtolower(trim(explode(',', $_SERVER['HTTP_X_FORWARDED_PROTO'])[0]));
+            }
+            $baseUrl = "$scheme://$host/";
+
+            $envPath = ROOTPATH . '.env';
+            $fp      = fopen($envPath, 'c+');
+            if ($fp === false) {
+                return service('response')->setStatusCode(500)->setBody("Could not open $envPath");
+            }
+            flock($fp, LOCK_EX);
+            $lines = explode("\n", rtrim((string) stream_get_contents($fp), "\n"));
+            $found = false;
+            foreach ($lines as $i => $line) {
+                if (preg_match('/^\s*app\.baseURL\s*=/', $line)) {
+                    $lines[$i] = "app.baseURL = '$baseUrl'";
+                    $found      = true;
+                }
+            }
+            if (!$found) {
+                $lines[] = "app.baseURL = '$baseUrl'";
+            }
+            ftruncate($fp, 0);
+            rewind($fp);
+            fwrite($fp, implode("\n", $lines) . "\n");
+            flock($fp, LOCK_UN);
+            fclose($fp);
+
+            return service('response')->setStatusCode(200)->setBody("app.baseURL set to $baseUrl\n");
+        });
+
         $routes->get('server-list.json', static function () {
             $servers = [];
             $self    = rtrim((string) config('App')->baseURL, '/');
