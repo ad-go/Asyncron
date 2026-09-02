@@ -10,6 +10,13 @@ tasks + queue install.
 
 *Unofficial - not affiliated with, or endorsed by, the CodeIgniter Foundation.*
 
+**The library is `src/` (`composer.json`'s own `autoload` maps `AdGo\Cluster\`/`AdGo\Cluster\UI\`
+straight to it) plus the static files in `assets/`, published into a consuming app's own
+`public/assets/` at install time.** Everything else at the repo root (`app/`, `public/`, `spark`,
+`tests/`, `phpunit.dist.xml`) is a local dev/test harness only (`autoload-dev`, never shipped to a
+consumer) - a full CodeIgniter skeleton this package can run and test standalone against, since the
+framework has no headless test mode without one.
+
 ## Install
 
 ```console
