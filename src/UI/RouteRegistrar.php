@@ -197,6 +197,31 @@ class RouteRegistrar
             return service('response')->setStatusCode(200)->setBody("$thisNode's own publicKey set to match its existing signingPrivateKey.\n");
         }, ['filter' => 'session']);
 
+        // Self-service equivalent of `spark queue:retry` - found live
+        // 2026-09-02: a peer that's down for a while accumulates failed
+        // cluster-files jobs (PushFileJob's own retry budget exhausted),
+        // and peerHealthStatuses()'s own docblock deliberately makes ANY
+        // queue_jobs_failed row for that peer mark it 'bad' forever, even
+        // after the peer comes back and every NEW sync succeeds - a stuck
+        // job is a real thing to surface, not something a later success
+        // should silently paper over. Once the peer is actually confirmed
+        // back (Settings' "Test" button both directions), this is how an
+        // admin clears the backlog without CLI/SSH access: re-pushes every
+        // failed job onto its original queue and removes it from
+        // queue_jobs_failed (BaseHandler::retry()'s own behavior, the
+        // exact thing `spark queue:retry` calls) - a real retry, not a
+        // silent delete, so a job that fails again just lands right back
+        // here.
+        $routes->get('fix-retry-failed-queue', static function () {
+            if (! auth()->loggedIn() || ! (auth()->user()?->inGroup('superadmin'))) {
+                return service('response')->setStatusCode(403)->setBody('Superadmin login required.');
+            }
+
+            $count = service('queue')->retry(null, null);
+
+            return service('response')->setStatusCode(200)->setBody("Retried $count failed job(s).\n");
+        }, ['filter' => 'session']);
+
         $routes->get('server-list.json', static function () {
             return service('response')
                 ->setStatusCode(200)
