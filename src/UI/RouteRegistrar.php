@@ -122,6 +122,67 @@ class RouteRegistrar
             return service('response')->setStatusCode(200)->setBody("app.baseURL set to $baseUrl\n");
         });
 
+        // Session-gated (superadmin), unlike healthz/fix-baseurl/server-list.json
+        // above - this writes into cluster.nodes' trust data, not just a
+        // cosmetic/informational value. Found live 2026-09-02: a node that
+        // already had its OWN signingPrivateKey (carried across reinstalls
+        // by asyncron.php's own cluster-identity preserve step - see that
+        // script's own comment) got a BLANK publicKey for its own registry
+        // entry anyway, because addNode() always initializes a freshly
+        // added entry's publicKey to '' regardless of whether a keypair
+        // already exists - there's no path that reconciles the two. Every
+        // outgoing call then signed with the real private key, which every
+        // peer rejected (Cluster::verifyAuthHeader() has no public key on
+        // file to check it against), while autoStartCluster()'s own
+        // "reuse this node's identity" branch kept re-sending that SAME
+        // blank publicKey on every retry, since it trusts the registry
+        // entry rather than re-deriving from the key it already holds.
+        // This is the one-time reconciliation: derive the public half from
+        // the private key this node already has (never transmits or
+        // exposes the private key itself) and write it into this node's
+        // own entry, self-healing exactly that gap without generating a
+        // new keypair (which would just orphan any peer that already
+        // trusted the old public key).
+        $routes->get('fix-cluster-publickey', static function () {
+            if (! auth()->loggedIn() || ! (auth()->user()?->inGroup('superadmin'))) {
+                return service('response')->setStatusCode(403)->setBody('Superadmin login required.');
+            }
+            if (! class_exists(\AdGo\Cluster\Cluster::class)) {
+                return service('response')->setStatusCode(503)->setBody('ad-go/cluster is not installed.');
+            }
+
+            $clusterConfig = config('Cluster');
+            $privateKeyB64 = $clusterConfig->signingPrivateKey;
+            $thisNode      = $clusterConfig->thisNode;
+            if ($privateKeyB64 === '' || $thisNode === '') {
+                return service('response')->setStatusCode(422)->setBody('This node has no signingPrivateKey/thisNode configured yet - nothing to derive.');
+            }
+
+            $privateKeyPem = base64_decode($privateKeyB64, true);
+            $privateKey    = $privateKeyPem !== false ? openssl_pkey_get_private($privateKeyPem) : false;
+            $details       = $privateKey !== false ? openssl_pkey_get_details($privateKey) : false;
+            if ($details === false || ! isset($details['key'])) {
+                return service('response')->setStatusCode(500)->setBody('Could not derive a public key from the configured signingPrivateKey.');
+            }
+            $derivedPublicKeyB64 = base64_encode($details['key']);
+
+            $cluster = new \AdGo\Cluster\Cluster();
+            $entries = $cluster->allNodes();
+            if (! array_key_exists($thisNode, $entries)) {
+                return service('response')->setStatusCode(422)->setBody("This node's own name ('$thisNode') has no registry entry to update - add it via Settings first.");
+            }
+            if (($entries[$thisNode]['publicKey'] ?? '') === $derivedPublicKeyB64) {
+                return service('response')->setStatusCode(200)->setBody("Already up to date - $thisNode's own publicKey already matches its signingPrivateKey.\n");
+            }
+
+            $entries[$thisNode]['publicKey'] = $derivedPublicKeyB64;
+            if (! \AdGo\Cluster\ClusterEnvWriter::writeNodes($entries)) {
+                return service('response')->setStatusCode(500)->setBody('Could not write .env.');
+            }
+
+            return service('response')->setStatusCode(200)->setBody("$thisNode's own publicKey set to match its existing signingPrivateKey.\n");
+        }, ['filter' => 'session']);
+
         $routes->get('server-list.json', static function () {
             $servers = [];
             $self    = rtrim((string) config('App')->baseURL, '/');
