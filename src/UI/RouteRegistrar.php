@@ -222,6 +222,27 @@ class RouteRegistrar
             return service('response')->setStatusCode(200)->setBody("Retried $count failed job(s).\n");
         }, ['filter' => 'session']);
 
+        // Manual catch-up for whatever `* * * * * php spark tasks:run` (this
+        // project's own crontab entry, kept in sync by hand per node - not
+        // managed by this script - see README "Running it") would have done
+        // on its own next tick - file/DB sync, NAT pulling, the outbound
+        // queue worker, all in one call (Config\Tasks' own schedule). Found
+        // live 2026-09-02: needed alongside fix-retry-failed-queue above to
+        // actually SEE a peer's just-retried jobs go through immediately,
+        // rather than waiting on (or debugging, with no shell access) that
+        // node's own crontab.
+        $routes->get('fix-run-tasks', static function () {
+            if (! auth()->loggedIn() || ! (auth()->user()?->inGroup('superadmin'))) {
+                return service('response')->setStatusCode(403)->setBody('Superadmin login required.');
+            }
+
+            ob_start();
+            command('tasks:run');
+            $output = ob_get_clean();
+
+            return service('response')->setStatusCode(200)->setBody($output !== '' ? $output : "tasks:run completed with no output.\n");
+        }, ['filter' => 'session']);
+
         $routes->get('server-list.json', static function () {
             return service('response')
                 ->setStatusCode(200)
