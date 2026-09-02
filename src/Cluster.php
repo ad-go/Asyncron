@@ -473,12 +473,21 @@ class Cluster
     /**
      * Applies an incoming upsert (received via push - NodeRegistryController::
      * receive() - or pull - PullSync::applyNodeRegistrySnapshot()) to THIS
-     * node's own cluster.nodes. Two guards before anything is written:
+     * node's own cluster.nodes. Three guards before anything is written:
      *
      * - Never let a peer overwrite THIS node's own identity entry - a stale
      *   or malicious upsert for $thisNode could otherwise downgrade this
      *   node's own publicKey out from under it, breaking its ability to
      *   sign future outgoing requests (see authHeader()'s own docblock).
+     * - Never let an incoming blank publicKey downgrade an existing non-
+     *   blank one - found live 2026-09-02: a node re-added after losing its
+     *   local Settings rows (a reinstall wipes them, keeping only cluster.*
+     *   .env lines) re-broadcasts its OTHER peers with a fresh, blank
+     *   publicKey (addNode() always starts blank), which - before this
+     *   guard - silently downgraded THIRD parties' already-completed
+     *   pairings mesh-wide. A real key CHANGE for an already-paired peer
+     *   still can't happen here at all (same as clusterHandshake()'s own
+     *   "already paired" refusal) - it takes a deliberate re-pair.
      * - No-op (not even a re-record) when the incoming entry is byte-
      *   identical to what's already on file - the same "unchanged content
      *   never re-touches recordedAt" dedup NodeRegistryState relies on to
@@ -503,16 +512,22 @@ class Cluster
             return ['applied' => false, 'reason' => 'refused - own identity'];
         }
 
+        $existing = $this->config->nodes[$name] ?? null;
+
+        $incomingPublicKey = (string) ($entry['publicKey'] ?? '');
+        if ($incomingPublicKey === '' && ($existing['publicKey'] ?? '') !== '') {
+            $incomingPublicKey = $existing['publicKey'];
+        }
+
         $entry = [
             'baseURL'   => rtrim((string) ($entry['baseURL'] ?? ''), '/') . '/',
             'type'      => (string) ($entry['type'] ?? 'public'),
-            'publicKey' => (string) ($entry['publicKey'] ?? ''),
+            'publicKey' => $incomingPublicKey,
         ];
         if ($entry['baseURL'] === '/') {
             return ['applied' => false, 'reason' => 'missing baseURL'];
         }
 
-        $existing = $this->config->nodes[$name] ?? null;
         if ($existing !== null
             && $existing['baseURL'] === $entry['baseURL']
             && $existing['type'] === $entry['type']
