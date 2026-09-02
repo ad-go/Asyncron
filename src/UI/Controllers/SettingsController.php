@@ -54,6 +54,20 @@ class SettingsController extends BaseController
     public const NODE_TYPES = ['nat', 'public', 'local'];
     public const NODE_PROTOCOLS = ['FTP', 'FTPS explicit (AUTH TLS)', 'SSH', 'SCP', 'LOCAL'];
 
+    // Shared by every AJAX endpoint below - 19 identical copies of this
+    // exact check/response before this extraction (found live 2026-09-03).
+    // index() alone stays separate: a page view redirects a non-admin to
+    // the dashboard instead of returning bare JSON, since it's the one
+    // method here a browser navigates to directly rather than fetch()es.
+    private function requireSuperadmin(): ?ResponseInterface
+    {
+        if (! (auth()->user()?->inGroup('superadmin'))) {
+            return $this->response->setStatusCode(403)->setJSON(['ok' => false]);
+        }
+
+        return null;
+    }
+
     // Per-node Databases table, same swap-on-select shape as Nodes' FTP/SSH
     // credential families above, generalized to FIVE independent sets
     // instead of two - one per CI4-supported driver, not just the driver
@@ -204,8 +218,8 @@ class SettingsController extends BaseController
     // page, so it needs its own check.
     public function nodeStatus(): ResponseInterface
     {
-        if (! (auth()->user()?->inGroup('superadmin'))) {
-            return $this->response->setStatusCode(403)->setJSON(['ok' => false]);
+        if ($denied = $this->requireSuperadmin()) {
+            return $denied;
         }
 
         $health = class_exists(\AdGo\Cluster\Cluster::class) ? (new \AdGo\Cluster\Cluster())->peerHealthStatuses() : [];
@@ -231,8 +245,8 @@ class SettingsController extends BaseController
     // avoids a second place that could drift from the key actually in use.
     public function clusterIdentity(): ResponseInterface
     {
-        if (! (auth()->user()?->inGroup('superadmin'))) {
-            return $this->response->setStatusCode(403)->setJSON(['ok' => false]);
+        if ($denied = $this->requireSuperadmin()) {
+            return $denied;
         }
 
         $cluster = class_exists(\AdGo\Cluster\Cluster::class) ? new \AdGo\Cluster\Cluster() : null;
@@ -267,8 +281,8 @@ class SettingsController extends BaseController
     // flipping it here can never affect any other node's own choice.
     public function updateSettingsSync(): ResponseInterface
     {
-        if (! (auth()->user()?->inGroup('superadmin'))) {
-            return $this->response->setStatusCode(403)->setJSON(['ok' => false]);
+        if ($denied = $this->requireSuperadmin()) {
+            return $denied;
         }
         if (! class_exists(\AdGo\Cluster\Cluster::class)) {
             return $this->response->setStatusCode(503)->setJSON(['ok' => false]);
@@ -288,8 +302,8 @@ class SettingsController extends BaseController
     // updateSettingsSync() above, opposite default.
     public function updateProductionSync(): ResponseInterface
     {
-        if (! (auth()->user()?->inGroup('superadmin'))) {
-            return $this->response->setStatusCode(403)->setJSON(['ok' => false]);
+        if ($denied = $this->requireSuperadmin()) {
+            return $denied;
         }
         if (! class_exists(\AdGo\Cluster\Cluster::class)) {
             return $this->response->setStatusCode(503)->setJSON(['ok' => false]);
@@ -341,8 +355,8 @@ class SettingsController extends BaseController
 
     public function update(): ResponseInterface
     {
-        if (! (auth()->user()?->inGroup('superadmin'))) {
-            return $this->response->setStatusCode(403)->setJSON(['ok' => false]);
+        if ($denied = $this->requireSuperadmin()) {
+            return $denied;
         }
 
         $allowed = ['title', 'footer', 'theme', 'themeColor'];
@@ -477,8 +491,8 @@ class SettingsController extends BaseController
     // shape as updateNode() below, just against DATABASE_PROPS/DATABASE_TYPES.
     public function updateDatabase(): ResponseInterface
     {
-        if (! (auth()->user()?->inGroup('superadmin'))) {
-            return $this->response->setStatusCode(403)->setJSON(['ok' => false]);
+        if ($denied = $this->requireSuperadmin()) {
+            return $denied;
         }
 
         $node  = (string) $this->request->getPost('node');
@@ -503,8 +517,8 @@ class SettingsController extends BaseController
     // instead of a flat field name since this is a table, not a form.
     public function updateNode(): ResponseInterface
     {
-        if (! (auth()->user()?->inGroup('superadmin'))) {
-            return $this->response->setStatusCode(403)->setJSON(['ok' => false]);
+        if ($denied = $this->requireSuperadmin()) {
+            return $denied;
         }
 
         $node  = (string) $this->request->getPost('node');
@@ -543,8 +557,8 @@ class SettingsController extends BaseController
     // just call the checkers locally like it used to.
     public function testNode(): ResponseInterface
     {
-        if (! (auth()->user()?->inGroup('superadmin'))) {
-            return $this->response->setStatusCode(403)->setJSON(['ok' => false]);
+        if ($denied = $this->requireSuperadmin()) {
+            return $denied;
         }
 
         $node  = (string) $this->request->getPost('node');
@@ -798,8 +812,8 @@ class SettingsController extends BaseController
     // client-side timeout) arrives.
     public function testResult(): ResponseInterface
     {
-        if (! (auth()->user()?->inGroup('superadmin'))) {
-            return $this->response->setStatusCode(403)->setJSON(['ok' => false]);
+        if ($denied = $this->requireSuperadmin()) {
+            return $denied;
         }
 
         $requestId = (string) $this->request->getGet('requestId');
@@ -845,8 +859,8 @@ class SettingsController extends BaseController
     //    smaller-than-hoped-for jump start.
     public function restartCluster(): ResponseInterface
     {
-        if (! (auth()->user()?->inGroup('superadmin'))) {
-            return $this->response->setStatusCode(403)->setJSON(['ok' => false]);
+        if ($denied = $this->requireSuperadmin()) {
+            return $denied;
         }
         if (! class_exists(\AdGo\Cluster\Cluster::class)) {
             return $this->response->setStatusCode(503)->setJSON(['ok' => false]);
@@ -927,8 +941,8 @@ class SettingsController extends BaseController
     // failing must never stop the rest of the tree from getting fixed.
     public function fixWritablePermissions(): ResponseInterface
     {
-        if (! (auth()->user()?->inGroup('superadmin'))) {
-            return $this->response->setStatusCode(403)->setJSON(['ok' => false]);
+        if ($denied = $this->requireSuperadmin()) {
+            return $denied;
         }
 
         $root = rtrim(WRITEPATH, '/\\');
@@ -1084,8 +1098,8 @@ class SettingsController extends BaseController
     // response instead.
     public function exportSettings(): ResponseInterface
     {
-        if (! (auth()->user()?->inGroup('superadmin'))) {
-            return $this->response->setStatusCode(403)->setJSON(['ok' => false]);
+        if ($denied = $this->requireSuperadmin()) {
+            return $denied;
         }
 
         $password = (string) $this->request->getPost('password');
@@ -1145,8 +1159,8 @@ class SettingsController extends BaseController
     // in this project).
     public function importSettings(): ResponseInterface
     {
-        if (! (auth()->user()?->inGroup('superadmin'))) {
-            return $this->response->setStatusCode(403)->setJSON(['ok' => false]);
+        if ($denied = $this->requireSuperadmin()) {
+            return $denied;
         }
 
         $file = $this->request->getFile('file');
@@ -1260,8 +1274,8 @@ class SettingsController extends BaseController
     // install.ps1), not a web upload with no rollback.
     public function importCluster(): ResponseInterface
     {
-        if (! (auth()->user()?->inGroup('superadmin'))) {
-            return $this->response->setStatusCode(403)->setJSON(['ok' => false]);
+        if ($denied = $this->requireSuperadmin()) {
+            return $denied;
         }
 
         $existing = class_exists(\AdGo\Cluster\Cluster::class) ? (new \AdGo\Cluster\Cluster())->allNodes() : [];
@@ -1829,8 +1843,8 @@ class SettingsController extends BaseController
     // any node this cluster started with.
     public function addNode(): ResponseInterface
     {
-        if (! (auth()->user()?->inGroup('superadmin'))) {
-            return $this->response->setStatusCode(403)->setJSON(['ok' => false]);
+        if ($denied = $this->requireSuperadmin()) {
+            return $denied;
         }
 
         $name = trim((string) $this->request->getPost('name'));
@@ -1936,8 +1950,8 @@ class SettingsController extends BaseController
     // exactly what reappears, not a broken one.
     public function deleteNode(): ResponseInterface
     {
-        if (! (auth()->user()?->inGroup('superadmin'))) {
-            return $this->response->setStatusCode(403)->setJSON(['ok' => false]);
+        if ($denied = $this->requireSuperadmin()) {
+            return $denied;
         }
 
         $name = (string) $this->request->getPost('node');
@@ -1988,8 +2002,8 @@ class SettingsController extends BaseController
     // simply stops answering).
     public function resetCluster(): ResponseInterface
     {
-        if (! (auth()->user()?->inGroup('superadmin'))) {
-            return $this->response->setStatusCode(403)->setJSON(['ok' => false]);
+        if ($denied = $this->requireSuperadmin()) {
+            return $denied;
         }
 
         $existing = class_exists(\AdGo\Cluster\Cluster::class) ? (new \AdGo\Cluster\Cluster())->allNodes() : [];
@@ -2058,8 +2072,8 @@ class SettingsController extends BaseController
 
     public function uploadLogo(): ResponseInterface
     {
-        if (! (auth()->user()?->inGroup('superadmin'))) {
-            return $this->response->setStatusCode(403)->setJSON(['ok' => false]);
+        if ($denied = $this->requireSuperadmin()) {
+            return $denied;
         }
 
         $logo = $this->request->getFile('logo');
@@ -2080,8 +2094,8 @@ class SettingsController extends BaseController
     // Thumbnail "Delete" badge next to the logo upload field.
     public function deleteLogo(): ResponseInterface
     {
-        if (! (auth()->user()?->inGroup('superadmin'))) {
-            return $this->response->setStatusCode(403)->setJSON(['ok' => false]);
+        if ($denied = $this->requireSuperadmin()) {
+            return $denied;
         }
 
         $path = setting('Site.logo');

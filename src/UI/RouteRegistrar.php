@@ -53,6 +53,20 @@ class RouteRegistrar
         return array_values(array_unique(array_filter($servers)));
     }
 
+    // Shared by every fix-* self-service repair/diagnostic route below -
+    // all six repeated this identical 3-line guard verbatim before this
+    // extraction. Returns a 403 response to return-and-short-circuit on,
+    // or null when the caller may proceed - `if ($denied = self::
+    // requireSuperadmin()) { return $denied; }` at the top of each closure.
+    private static function requireSuperadmin(): ?\CodeIgniter\HTTP\ResponseInterface
+    {
+        if (! auth()->loggedIn() || ! (auth()->user()?->inGroup('superadmin'))) {
+            return service('response')->setStatusCode(403)->setBody('Superadmin login required.');
+        }
+
+        return null;
+    }
+
     public static function register(RouteCollection $routes): void
     {
         // Leading backslash required on every controller reference below -
@@ -158,8 +172,8 @@ class RouteRegistrar
         // new keypair (which would just orphan any peer that already
         // trusted the old public key).
         $routes->get('fix-cluster-publickey', static function () {
-            if (! auth()->loggedIn() || ! (auth()->user()?->inGroup('superadmin'))) {
-                return service('response')->setStatusCode(403)->setBody('Superadmin login required.');
+            if ($denied = self::requireSuperadmin()) {
+                return $denied;
             }
             if (! class_exists(\AdGo\Cluster\Cluster::class)) {
                 return service('response')->setStatusCode(503)->setBody('ad-go/cluster is not installed.');
@@ -209,8 +223,8 @@ class RouteRegistrar
         // effect. This writes .env directly, exactly like updateNode()
         // does for its own whitelisted fields, and broadcasts nothing.
         $routes->get('fix-reset-peer-key', static function () {
-            if (! auth()->loggedIn() || ! (auth()->user()?->inGroup('superadmin'))) {
-                return service('response')->setStatusCode(403)->setBody('Superadmin login required.');
+            if ($denied = self::requireSuperadmin()) {
+                return $denied;
             }
             if (! class_exists(\AdGo\Cluster\Cluster::class)) {
                 return service('response')->setStatusCode(503)->setBody('ad-go/cluster is not installed.');
@@ -254,8 +268,8 @@ class RouteRegistrar
         // silent delete, so a job that fails again just lands right back
         // here.
         $routes->get('fix-retry-failed-queue', static function () {
-            if (! auth()->loggedIn() || ! (auth()->user()?->inGroup('superadmin'))) {
-                return service('response')->setStatusCode(403)->setBody('Superadmin login required.');
+            if ($denied = self::requireSuperadmin()) {
+                return $denied;
             }
 
             $count = service('queue')->retry(null, null);
@@ -273,8 +287,8 @@ class RouteRegistrar
         // rather than waiting on (or debugging, with no shell access) that
         // node's own crontab.
         $routes->get('fix-run-tasks', static function () {
-            if (! auth()->loggedIn() || ! (auth()->user()?->inGroup('superadmin'))) {
-                return service('response')->setStatusCode(403)->setBody('Superadmin login required.');
+            if ($denied = self::requireSuperadmin()) {
+                return $denied;
             }
 
             ob_start();
@@ -291,8 +305,8 @@ class RouteRegistrar
         // recurring failure without dumping an unbounded backlog into one
         // response.
         $routes->get('fix-show-failed-queue', static function () {
-            if (! auth()->loggedIn() || ! (auth()->user()?->inGroup('superadmin'))) {
-                return service('response')->setStatusCode(403)->setBody('Superadmin login required.');
+            if ($denied = self::requireSuperadmin()) {
+                return $denied;
             }
 
             $rows = model(\CodeIgniter\Queue\Models\QueueJobFailedModel::class)
@@ -321,8 +335,8 @@ class RouteRegistrar
         // instead - see those classes' own catch blocks). This reads THAT
         // log directly since it's the one with the actual message.
         $routes->get('fix-show-sync-errors', static function () {
-            if (! auth()->loggedIn() || ! (auth()->user()?->inGroup('superadmin'))) {
-                return service('response')->setStatusCode(403)->setBody('Superadmin login required.');
+            if ($denied = self::requireSuperadmin()) {
+                return $denied;
             }
             if (! class_exists(\AdGo\Cluster\DbSyncLog::class)) {
                 return service('response')->setStatusCode(503)->setBody('ad-go/cluster is not installed.');
