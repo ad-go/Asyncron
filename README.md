@@ -206,20 +206,28 @@ Everything below rides that same public-push / NAT-pull split:
 
 ## Client-side node picker
 
-Two unauthenticated GET routes exist purely for a browser-side "connect me to whichever node is
-actually up" landing page (see `RouteRegistrar::register()`), not for anything inside the app
-itself:
+A browser-side "connect me to whichever node is actually up" flow, backed by two unauthenticated
+GET routes (see `RouteRegistrar::register()`):
 
 - `/healthz` - always `200 ok`, no session/DB/filters touched at all - the one route that still
   answers even if this node's database is down.
 - `/server-list.json` - `{"servers": [...]}`, this node's own `app.baseURL` plus every `public`-type
   peer from `Config\Cluster::$nodes` (a `nat` peer has no URL a browser could reach directly, so
-  it's left out).
+  it's left out). `RouteRegistrar::servers()` is the one place computing this list - reused by
+  every consumer below instead of drifting into three copies.
 
-A small static page that races these across every known node, remembers the last one that
-answered, and works offline via a service worker lives outside this repo (deploy it anywhere -
-GitHub Pages, S3, a node's own `public/` - it only ever talks to these two routes over plain
-`fetch()`).
+The actual racing logic (`public/assets/node-picker.js`) is shared by two consumers:
+
+- **`/start`** - an unauthenticated, full-page landing spot: races every known server against
+  `/healthz`, seeded server-side from `RouteRegistrar::servers()` so the first paint already has
+  the right list, and auto-redirects to whichever answers first (landing on `/` there lets
+  Shield's own `session` filter decide login vs Dashboard). Offline fallback (retry / manual URL)
+  when nothing answers. Bookmark this instead of any one specific node's URL.
+- **The login page** - a non-intrusive counterpart: since you're already looking at a page that
+  answered, there's nothing to fall back FROM the way `/start` handles a dead node. It probes every
+  known server anyway and shows a dismissible banner ("X answers faster right now" + a link) only
+  when a peer beats this node's own latency by a real margin (150ms) - never an automatic redirect
+  away from a form you may already be filling in.
 
 ## Not built yet
 

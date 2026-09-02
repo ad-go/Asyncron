@@ -29,6 +29,29 @@ use CodeIgniter\Router\RouteCollection;
  */
 class RouteRegistrar
 {
+    // Shared by /server-list.json, /start, and the login page's own
+    // "faster node?" banner - one place computing "this node plus every
+    // reachable public peer" instead of three copies drifting apart. See
+    // the /server-list.json route below for why 'nat' peers are excluded
+    // and why this node's own baseURL (not itself a member of Config\
+    // Cluster::$nodes, which holds PEERS only) is added back in.
+    public static function servers(): array
+    {
+        $servers = [];
+        $self    = rtrim((string) config('App')->baseURL, '/');
+        if ($self !== '') {
+            $servers[] = $self;
+        }
+        foreach (config('Cluster')->nodes as $node) {
+            if (($node['type'] ?? 'public') !== 'public') {
+                continue;
+            }
+            $servers[] = rtrim((string) ($node['baseURL'] ?? ''), '/');
+        }
+
+        return array_values(array_unique(array_filter($servers)));
+    }
+
     public static function register(RouteCollection $routes): void
     {
         // Leading backslash required on every controller reference below -
@@ -184,24 +207,24 @@ class RouteRegistrar
         }, ['filter' => 'session']);
 
         $routes->get('server-list.json', static function () {
-            $servers = [];
-            $self    = rtrim((string) config('App')->baseURL, '/');
-            if ($self !== '') {
-                $servers[] = $self;
-            }
-            foreach (config('Cluster')->nodes as $node) {
-                if (($node['type'] ?? 'public') !== 'public') {
-                    continue;
-                }
-                $servers[] = rtrim((string) ($node['baseURL'] ?? ''), '/');
-            }
-            $servers = array_values(array_unique(array_filter($servers)));
-
             return service('response')
                 ->setStatusCode(200)
                 ->setContentType('application/json')
-                ->setBody(json_encode(['servers' => $servers], JSON_UNESCAPED_SLASHES));
+                ->setBody(json_encode(['servers' => self::servers()], JSON_UNESCAPED_SLASHES));
         });
+
+        // Unauthenticated - the whole point is answering BEFORE anyone
+        // knows which node to trust, same public-entry-point reasoning as
+        // healthz/server-list.json above. Ports C:\ai\server-picker's own
+        // standalone racing page into the app itself (see public/assets/
+        // node-picker.js) instead of that page needing its own separate
+        // hosting - this route serves the identical experience, seeded
+        // server-side from self::servers() so the very first paint already
+        // has the right list with no extra round trip, and auto-redirects
+        // to whichever node answers /healthz first. Landing on '/' from
+        // there lets Shield's own 'session' filter decide login vs
+        // Dashboard - this route never needs to know which one applies.
+        $routes->get('start', static fn () => view('\AdGo\Cluster\UI\Views\start', ['servers' => self::servers()]));
 
         $routes->get('/', '\AdGo\Cluster\UI\Controllers\Dashboard::index', ['as' => 'dashboard', 'filter' => 'session']);
         $routes->get('dashboard/network-status', '\AdGo\Cluster\UI\Controllers\Dashboard::networkStatus', ['filter' => 'session']);

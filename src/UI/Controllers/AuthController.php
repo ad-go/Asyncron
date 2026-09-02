@@ -13,7 +13,18 @@ class AuthController extends BaseController
             return redirect()->to(config('Auth')->loginRedirect())->withCookies();
         }
 
-        return view(config('Auth')->views['login']);
+        // Feeds the "a faster node is answering right now" banner (see
+        // that view's own script) - the exact same self-plus-public-peers
+        // list /server-list.json and /start already compute, reused here
+        // so all three stay in sync automatically. class_exists()-guarded
+        // like every other ad-go/cluster touchpoint in this controller -
+        // an install without that optional peer package just never shows
+        // the banner, same as it never shows a Cluster card in Settings.
+        $servers = class_exists(\AdGo\Cluster\UI\RouteRegistrar::class)
+            ? \AdGo\Cluster\UI\RouteRegistrar::servers()
+            : [];
+
+        return view(config('Auth')->views['login'], ['servers' => $servers]);
     }
 
     public function loginAction(): RedirectResponse

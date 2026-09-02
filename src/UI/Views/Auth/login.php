@@ -33,6 +33,13 @@
             </div>
         </div>
         <?php if (session('error')) : ?><div class="alert alert-danger"><?= esc(session('error')) ?></div><?php endif ?>
+        <div id="faster-node-banner" class="alert alert-info d-none align-items-center justify-content-between" role="alert" style="display:flex">
+            <span id="faster-node-text"></span>
+            <span class="ms-2 text-nowrap">
+                <a href="#" id="faster-node-switch" class="alert-link"><?= lang('App.switchThere') ?></a>
+                <button type="button" class="btn-close ms-2" id="faster-node-dismiss" aria-label="<?= esc(lang('App.dismiss')) ?>"></button>
+            </span>
+        </div>
         <?php
             $mode = config('Auth')->loginIdentifier;
             // Which radio was selected on the failed attempt, if any - old()
@@ -100,5 +107,59 @@
         <?php endif ?>
     </div></div>
 </div></div>
+<script src="<?= base_url('assets/node-picker.js') ?>"></script>
+<script>
+(function () {
+    // Non-intrusive counterpart to /start's full-page auto-redirect
+    // (see that view's own script, and public/assets/node-picker.js they
+    // both share) - this page is ALREADY answering (you're looking at
+    // it), so there's nothing to fall back FROM the way /start handles a
+    // dead node; the only thing worth surfacing here is "a peer is
+    // meaningfully faster right now", as a dismissible suggestion, never
+    // an automatic redirect away from a login form someone may already
+    // be filling in.
+    var SERVERS = <?= json_encode($servers ?? [], JSON_UNESCAPED_SLASHES) ?>;
+    if (SERVERS.length < 2) { return; }
+
+    var CURRENT = location.origin.replace(/\/$/, '');
+    var results = {};
+    var remaining = SERVERS.length;
+    var MSG_TEMPLATE = <?= json_encode(lang('App.fasterNodeAvailable')) ?>;
+
+    function maybeShowBanner() {
+        var currentMs = results[CURRENT];
+        var bestUrl = null;
+        var bestMs = Infinity;
+        Object.keys(results).forEach(function (url) {
+            var ms = results[url];
+            if (url === CURRENT || ms === null) { return; }
+            if (ms < bestMs) { bestMs = ms; bestUrl = url; }
+        });
+        // Only worth a banner for a REAL gap, not a few ms of jitter on an
+        // otherwise-fine node - 150ms chosen the same way /start's own
+        // timeout was, a round number well above normal noise.
+        if (bestUrl === null || (currentMs !== null && bestMs >= currentMs - 150)) { return; }
+
+        var host = bestUrl.replace(/^https?:\/\//, '');
+        document.getElementById('faster-node-text').textContent = MSG_TEMPLATE.replace('{0}', host);
+        document.getElementById('faster-node-switch').href = bestUrl.replace(/\/$/, '') + '/login';
+        document.getElementById('faster-node-banner').classList.remove('d-none');
+    }
+
+    document.getElementById('faster-node-dismiss').addEventListener('click', function () {
+        document.getElementById('faster-node-banner').classList.add('d-none');
+    });
+
+    SERVERS.forEach(function (url) {
+        window.NodePicker.probe(url, '/healthz', 2500).then(
+            function (r) { results[url] = r.ms; },
+            function () { results[url] = null; }
+        ).then(function () {
+            remaining--;
+            if (remaining === 0) { maybeShowBanner(); }
+        });
+    });
+})();
+</script>
 <script src="<?= base_url('assets/app.js') ?>" defer></script>
 </body></html>
