@@ -1697,16 +1697,25 @@ class Cluster
                 // dbstat is a virtual table only present when SQLite was
                 // compiled with SQLITE_ENABLE_DBSTAT_VTAB - present on
                 // h1q/bak/res (confirmed live 2026-08-19), not guaranteed
-                // on every shared-hosting PHP build (beta/upz), hence the
-                // try/catch rather than a hard dependency. Restricted to
-                // real tables (excludes each table's own indexes, which
+                // on every shared-hosting PHP build (beta/upz). Restricted
+                // to real tables (excludes each table's own indexes, which
                 // also appear as rows in dbstat) via the sqlite_master
                 // subquery, so this is data-page size, not data+index.
-                $result = $db->query(
-                    "SELECT name, SUM(pgsize) AS sz FROM dbstat WHERE name IN (SELECT name FROM sqlite_master WHERE type='table') GROUP BY name"
-                );
-                foreach ($result->getResultArray() as $row) {
-                    $sizeByTable[(string) $row['name']] = (int) $row['sz'];
+                try {
+                    $result = $db->query(
+                        "SELECT name, SUM(pgsize) AS sz FROM dbstat WHERE name IN (SELECT name FROM sqlite_master WHERE type='table') GROUP BY name"
+                    );
+                    foreach ($result->getResultArray() as $row) {
+                        $sizeByTable[(string) $row['name']] = (int) $row['sz'];
+                    }
+                } catch (\Throwable $e) {
+                    // No dbstat on this build - fall back to a raw-content
+                    // estimate (sum of every column's byte length, via
+                    // SQLite's own LENGTH()/TYPEOF(), across all rows).
+                    // Excludes row/page/index overhead so it reads lower
+                    // than dbstat's true page size, but it's a real,
+                    // driver-portable number instead of "unsupported".
+                    $sizeByTable = $this->tableSizesByContentScan($db);
                 }
             } elseif ($db->DBDriver === 'MySQLi') {
                 $result = $db->query(
@@ -1730,6 +1739,57 @@ class Cluster
         }
 
         return [$sizeByTable, true];
+    }
+
+    /**
+     * Per-table size estimate for SQLite builds without dbstat (see
+     * tableSizesBestEffort()'s own docblock). BLOBs/text use LENGTH()
+     * directly; every other declared type is cast to TEXT first, since
+     * SQLite's dynamic typing means a column declared INTEGER can still
+     * hold a value LENGTH() would otherwise measure as an 8-byte float.
+     * One query per table (via sqlite_master, not listTables(), to reuse
+     * the same connection without a second round trip) - fine for the
+     * table counts this dashboard deals with, but not meant for a
+     * database with hundreds of tables.
+     *
+     * @return array<string, int> table name => estimated bytes
+     */
+    private function tableSizesByContentScan(\CodeIgniter\Database\ConnectionInterface $db): array
+    {
+        // sqlite_master's own table/column names never need escaping (they
+        // come straight back out of SQLite's own catalog, not user input),
+        // but escapeIdentifiers() is a BaseConnection method, not part of
+        // ConnectionInterface - db_connect() always hands back the former
+        // in practice, so assert it rather than widen every caller's type.
+        assert($db instanceof \CodeIgniter\Database\BaseConnection);
+
+        $sizeByTable = [];
+
+        $tables = $db->query(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+        )->getResultArray();
+
+        foreach ($tables as $row) {
+            $table   = (string) $row['name'];
+            $columns = $db->query('PRAGMA table_info(' . $db->escapeIdentifiers($table) . ')')->getResultArray();
+            if ($columns === []) {
+                continue;
+            }
+
+            $sumExpr = implode(' + ', array_map(
+                static fn (array $c): string => 'LENGTH(CAST(' . $db->escapeIdentifiers((string) $c['name']) . ' AS TEXT))',
+                $columns
+            ));
+
+            try {
+                $result = $db->query("SELECT SUM({$sumExpr}) AS sz FROM " . $db->escapeIdentifiers($table))->getResultArray();
+                $sizeByTable[$table] = (int) ($result[0]['sz'] ?? 0);
+            } catch (\Throwable $e) {
+                continue; // an unreadable/system table - leave it out of the estimate
+            }
+        }
+
+        return $sizeByTable;
     }
 
     /**
