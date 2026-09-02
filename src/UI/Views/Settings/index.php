@@ -99,6 +99,18 @@
                            <?= $settingsSyncEnabled ? 'checked' : '' ?>>
                     <span class="form-check-label"><?= lang('App.settingsSyncToggle') ?></span>
                 </label>
+                <!-- Per-node on/off switch for Config\Cluster::$dbSyncGroup's
+                     whole generic-table sync ("production" - the node's own
+                     pre-existing application database, distinct from this
+                     package's own settings/users bookkeeping above) - see
+                     DbSyncSchema::productionSyncEnabled()'s own docblock for
+                     why this defaults OFF, unlike the switch above. -->
+                <label class="form-check form-switch mb-0 mt-2">
+                    <input class="form-check-input" type="checkbox" id="production-sync-toggle"
+                           data-endpoint="<?= url_to('settings.updateProductionSync') ?>"
+                           <?= $productionSyncEnabled ? 'checked' : '' ?>>
+                    <span class="form-check-label"><?= lang('App.productionSyncToggle') ?></span>
+                </label>
                 <!-- Read-only status for Config\Cluster::$requireSignedAuth -
                      see SettingsController::index()'s own comment on why
                      this is a display-only badge, not a toggle: the flag is

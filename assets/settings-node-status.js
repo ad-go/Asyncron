@@ -235,35 +235,42 @@
         });
     }
 
-    // "Settings sync" switch - see SettingsController::updateSettingsSync()/
-    // DbSyncSchema::settingsSyncEnabled()'s own docblocks for exactly what
-    // this gates. Plain autosave-on-change, same as every other field on
-    // this page - reverts the visible checkbox state on any failure so it
-    // never silently claims a state the server didn't actually save.
-    var syncToggle = document.getElementById('settings-sync-toggle');
-    if (syncToggle) {
-        syncToggle.addEventListener('change', function () {
-            var enabled = syncToggle.checked;
-            syncToggle.disabled = true;
+    // Plain autosave-on-change checkbox, POSTing {enabled: '1'|'0'} to its
+    // own data-endpoint - shared by "Settings sync" and "Production sync"
+    // below (SettingsController::updateSettingsSync()/updateProductionSync(),
+    // DbSyncSchema::settingsSyncEnabled()/productionSyncEnabled()'s own
+    // docblocks for exactly what each gates). Reverts the visible checkbox
+    // state on any failure so it never silently claims a state the server
+    // didn't actually save.
+    function wireSyncToggle(id) {
+        var toggle = document.getElementById(id);
+        if (!toggle) return;
+
+        toggle.addEventListener('change', function () {
+            var enabled = toggle.checked;
+            toggle.disabled = true;
 
             var body = new URLSearchParams();
             body.set('enabled', enabled ? '1' : '0');
             if (window.CI4_CSRF) body.set(window.CI4_CSRF.name, window.CI4_CSRF.hash);
 
-            fetch(syncToggle.dataset.endpoint, { method: 'POST', body: body, headers: { 'X-Requested-With': 'XMLHttpRequest' } })
+            fetch(toggle.dataset.endpoint, { method: 'POST', body: body, headers: { 'X-Requested-With': 'XMLHttpRequest' } })
                 .then(function (r) { return r.json(); })
                 .then(function (data) {
                     if (window.syncCsrf) window.syncCsrf(data);
                     if (!data || !data.ok) {
-                        syncToggle.checked = !enabled;
+                        toggle.checked = !enabled;
                     }
                 })
                 .catch(function () {
-                    syncToggle.checked = !enabled;
+                    toggle.checked = !enabled;
                 })
                 .finally(function () {
-                    syncToggle.disabled = false;
+                    toggle.disabled = false;
                 });
         });
     }
+
+    wireSyncToggle('settings-sync-toggle');
+    wireSyncToggle('production-sync-toggle');
 })();

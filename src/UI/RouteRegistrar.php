@@ -243,6 +243,55 @@ class RouteRegistrar
             return service('response')->setStatusCode(200)->setBody($output !== '' ? $output : "tasks:run completed with no output.\n");
         }, ['filter' => 'session']);
 
+        // Read-only companion to fix-retry-failed-queue above - that route
+        // says HOW MANY jobs failed, never WHY, and there's no admin UI or
+        // shell access here to read queue_jobs_failed's own 'exceptions'
+        // column directly. Newest-first, capped at 5: enough to diagnose a
+        // recurring failure without dumping an unbounded backlog into one
+        // response.
+        $routes->get('fix-show-failed-queue', static function () {
+            if (! auth()->loggedIn() || ! (auth()->user()?->inGroup('superadmin'))) {
+                return service('response')->setStatusCode(403)->setBody('Superadmin login required.');
+            }
+
+            $rows = model(\CodeIgniter\Queue\Models\QueueJobFailedModel::class)
+                ->orderBy('id', 'DESC')
+                ->findAll(5);
+
+            $out = [];
+            foreach ($rows as $row) {
+                $out[] = [
+                    'id'      => $row->id,
+                    'queue'   => $row->queue,
+                    'job'     => $row->payload['job'] ?? null,
+                    'data'    => $row->payload['data'] ?? null,
+                    'error'   => $row->exceptions,
+                ];
+            }
+
+            return service('response')->setStatusCode(200)->setJSON($out);
+        }, ['filter' => 'session']);
+
+        // queue_jobs_failed's own 'exceptions' column came back empty on
+        // every job checked live 2026-09-02 (codeigniter4/queue populates
+        // it from BaseHandler::logFailed(), a DIFFERENT path than this
+        // package's own SyncDbRowJob/PushFileJob, which record their own
+        // human-readable error into DbSyncLog/writable/Cluster/db_sync_log.json
+        // instead - see those classes' own catch blocks). This reads THAT
+        // log directly since it's the one with the actual message.
+        $routes->get('fix-show-sync-errors', static function () {
+            if (! auth()->loggedIn() || ! (auth()->user()?->inGroup('superadmin'))) {
+                return service('response')->setStatusCode(403)->setBody('Superadmin login required.');
+            }
+            if (! class_exists(\AdGo\Cluster\DbSyncLog::class)) {
+                return service('response')->setStatusCode(503)->setBody('ad-go/cluster is not installed.');
+            }
+
+            $entries = array_slice(array_reverse((new \AdGo\Cluster\DbSyncLog())->all()), 0, 10);
+
+            return service('response')->setStatusCode(200)->setJSON($entries);
+        }, ['filter' => 'session']);
+
         $routes->get('server-list.json', static function () {
             return service('response')
                 ->setStatusCode(200)
@@ -284,6 +333,7 @@ class RouteRegistrar
         $routes->get('settings/node-status', '\AdGo\Cluster\UI\Controllers\SettingsController::nodeStatus', ['as' => 'settings.nodeStatus', 'filter' => 'session']);
         $routes->get('settings/cluster-identity', '\AdGo\Cluster\UI\Controllers\SettingsController::clusterIdentity', ['filter' => 'session']);
         $routes->post('settings/settings-sync', '\AdGo\Cluster\UI\Controllers\SettingsController::updateSettingsSync', ['as' => 'settings.updateSettingsSync', 'filter' => 'session']);
+        $routes->post('settings/production-sync', '\AdGo\Cluster\UI\Controllers\SettingsController::updateProductionSync', ['as' => 'settings.updateProductionSync', 'filter' => 'session']);
         $routes->post('settings/cluster-restart', '\AdGo\Cluster\UI\Controllers\SettingsController::restartCluster', ['as' => 'settings.restartCluster', 'filter' => 'session']);
         $routes->post('settings/fix-writable-permissions', '\AdGo\Cluster\UI\Controllers\SettingsController::fixWritablePermissions', ['filter' => 'session']);
         $routes->post('settings/databases', '\AdGo\Cluster\UI\Controllers\SettingsController::updateDatabase', ['as' => 'settings.updateDatabase', 'filter' => 'session']);

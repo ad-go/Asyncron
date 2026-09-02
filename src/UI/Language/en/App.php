@@ -53,6 +53,7 @@ return [
     'restartClusterDone' => 'Restart done: {0} peer(s) tested ({1} ok, {2} pending), sync/realign kicked off.',
     'restartClusterFailed' => 'Restart failed: {0}',
     'settingsSyncToggle' => 'Settings sync with other nodes',
+    'productionSyncToggle' => 'Production database sync with other nodes',
     'signedAuthEnforced' => 'Signed auth enforced - legacy shared secret retired',
     'signedAuthReady' => 'Ready to enforce signed auth - every peer has a key (set cluster.requireSignedAuth in .env)',
     'signedAuthNotReady' => 'Signed auth not enforced - some peers still rely on the legacy shared secret',

@@ -119,24 +119,29 @@ class SyncDbCommand extends BaseCommand
         // DbSyncSchema), same scan-and-diff detection and LWW timestamping
         // as settings above, just genuinely generic - see
         // DbSyncSchema::genericTables()/applyGenericSnapshot()'s own
-        // docblocks.
-        foreach (DbSyncSchema::genericTables() as $table => $keyColumn) {
-            foreach (DbSyncSchema::exportAllGenericKeys($db, $table, $keyColumn) as $keyValue) {
-                $snapshot = DbSyncSchema::exportGenericRow($db, $table, $keyColumn, $keyValue);
-                if ($snapshot === null) {
-                    continue;
-                }
-                $hash  = DbSyncSchema::hashSettingSnapshot($snapshot);
-                $key   = $keyValue;
-                $known = $manifest->get("$table:$key");
-                if ($known !== null && $known['hash'] === $hash) {
-                    continue;
-                }
+        // docblocks. Gated on productionSyncEnabled() the same way settings
+        // above is gated on settingsSyncEnabled() - skips the whole loop,
+        // not just the enqueue, for the same "don't pay for the scan while
+        // turned off" reasoning.
+        if (DbSyncSchema::productionSyncEnabled()) {
+            foreach (DbSyncSchema::genericTables() as $table => $keyColumn) {
+                foreach (DbSyncSchema::exportAllGenericKeys($db, $table, $keyColumn) as $keyValue) {
+                    $snapshot = DbSyncSchema::exportGenericRow($db, $table, $keyColumn, $keyValue);
+                    if ($snapshot === null) {
+                        continue;
+                    }
+                    $hash  = DbSyncSchema::hashSettingSnapshot($snapshot);
+                    $key   = $keyValue;
+                    $known = $manifest->get("$table:$key");
+                    if ($known !== null && $known['hash'] === $hash) {
+                        continue;
+                    }
 
-                $timestamp = $this->rowTimestamp($snapshot['updated_at'] ?? null);
-                $manifest->record("$table:$key", ['hash' => $hash, 'timestamp' => $timestamp]);
-                $this->enqueueToEveryPeer($config, $peers, $table, $key, $snapshot, $timestamp);
-                $changed++;
+                    $timestamp = $this->rowTimestamp($snapshot['updated_at'] ?? null);
+                    $manifest->record("$table:$key", ['hash' => $hash, 'timestamp' => $timestamp]);
+                    $this->enqueueToEveryPeer($config, $peers, $table, $key, $snapshot, $timestamp);
+                    $changed++;
+                }
             }
         }
 

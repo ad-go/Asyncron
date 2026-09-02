@@ -53,6 +53,7 @@ return [
     'restartClusterDone' => 'Repornire finalizată: {0} nod(uri) testate ({1} ok, {2} în așteptare), sincronizare/armonizare pornite.',
     'restartClusterFailed' => 'Repornire eșuată: {0}',
     'settingsSyncToggle' => 'Sincronizare setări cu celelalte noduri',
+    'productionSyncToggle' => 'Sincronizare bază de date "production" cu celelalte noduri',
     'signedAuthEnforced' => 'Autentificare semnată impusă - secretul comun vechi a fost retras',
     'signedAuthReady' => 'Gata pentru autentificare semnată - fiecare nod are o cheie (setează cluster.requireSignedAuth în .env)',
     'signedAuthNotReady' => 'Autentificare semnată neimpusă - unele noduri încă folosesc secretul comun vechi',

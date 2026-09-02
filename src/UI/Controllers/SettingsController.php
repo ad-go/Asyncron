@@ -167,6 +167,14 @@ class SettingsController extends BaseController
             // ad-go/cluster isn't installed at all, same "nothing to turn
             // off" reasoning nodeHealth's own [] fallback above uses.
             'settingsSyncEnabled' => class_exists(\AdGo\Cluster\DbSyncSchema::class) ? \AdGo\Cluster\DbSyncSchema::settingsSyncEnabled() : true,
+            // Mirrors settingsSyncEnabled() above, for Config\Cluster::
+            // $dbSyncGroup's whole generic-table sync instead - see
+            // DbSyncSchema::productionSyncEnabled()'s own docblock for why
+            // this one defaults OFF (opt-in) rather than on. false, not
+            // true, when ad-go/cluster isn't installed - "nothing to turn
+            // off" doesn't apply the same way here since there's no
+            // $dbSyncGroup sync happening at all in that case either.
+            'productionSyncEnabled' => class_exists(\AdGo\Cluster\DbSyncSchema::class) && \AdGo\Cluster\DbSyncSchema::productionSyncEnabled(),
             // Node-status card footer badge for Config\Cluster::
             // $requireSignedAuth - see that property's own docblock and
             // Cluster::allPeersReadyForSignedAuth()'s. Read-only here (no
@@ -269,6 +277,27 @@ class SettingsController extends BaseController
         $enabled  = $this->request->getPost('enabled') === '1';
         $thisNode = (new \AdGo\Cluster\Cluster())->thisNodeName();
         service('settings')->set('Cluster.settingsSyncEnabled', $enabled ? '1' : '0', $thisNode);
+
+        return $this->response->setJSON(['ok' => true, 'csrf' => $this->csrfPayload()]);
+    }
+
+    // "Production sync" checkbox, right below "Settings sync" on the same
+    // card - see DbSyncSchema::productionSyncEnabled()'s own docblock for
+    // exactly what this gates (Config\Cluster::$dbSyncGroup's whole
+    // generic-table sync, both directions). Same storage mechanism as
+    // updateSettingsSync() above, opposite default.
+    public function updateProductionSync(): ResponseInterface
+    {
+        if (! (auth()->user()?->inGroup('superadmin'))) {
+            return $this->response->setStatusCode(403)->setJSON(['ok' => false]);
+        }
+        if (! class_exists(\AdGo\Cluster\Cluster::class)) {
+            return $this->response->setStatusCode(503)->setJSON(['ok' => false]);
+        }
+
+        $enabled  = $this->request->getPost('enabled') === '1';
+        $thisNode = (new \AdGo\Cluster\Cluster())->thisNodeName();
+        service('settings')->set('Cluster.productionSyncEnabled', $enabled ? '1' : '0', $thisNode);
 
         return $this->response->setJSON(['ok' => true, 'csrf' => $this->csrfPayload()]);
     }

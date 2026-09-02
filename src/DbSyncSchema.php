@@ -350,6 +350,27 @@ class DbSyncSchema
     }
 
     /**
+     * Per-node on/off switch for Config\Cluster::$dbSyncGroup's whole
+     * generic-table sync (genericTables()'s own discovery) - same
+     * mechanism/storage as settingsSyncEnabled() above, just opposite
+     * default: unset (a fresh install, or a node whose $dbSyncGroup points
+     * at real application/business data it hasn't explicitly opted into
+     * sharing yet) defaults to DISABLED, an opt-IN - unlike the 'settings'
+     * table (this package's own admin bookkeeping, safe by construction),
+     * $dbSyncGroup can point at an arbitrary pre-existing database a node
+     * already had before this package was ever installed; syncing it
+     * cluster-wide must be a deliberate choice, never a silent side effect
+     * of just configuring the group name.
+     */
+    public static function productionSyncEnabled(): bool
+    {
+        $thisNode = (string) config('Cluster')->thisNode;
+        $value    = service('settings')->get('Cluster.productionSyncEnabled', $thisNode);
+
+        return $value === '1';
+    }
+
+    /**
      * @return array{class: string, key: string, value: string, type: string, context: string, created_at?: string, updated_at?: string}|null
      */
     public static function exportSetting(ConnectionInterface $db, string $class, string $key, string $context): ?array
@@ -870,6 +891,14 @@ class DbSyncSchema
         // caller, so there's exactly one place this can ever be wrong.
         if ($table === 'settings' && ! self::settingsSyncEnabled()) {
             return ['applied' => false, 'reason' => 'settings sync disabled locally'];
+        }
+        // Same choke point, for $dbSyncGroup's generic tables - see
+        // productionSyncEnabled()'s own docblock. Checked against the real
+        // discovered table list (not just "isn't users/settings") so an
+        // actually-unknown table still falls through to the normal
+        // 'unknown table' rejection below instead of a misleading reason.
+        if (array_key_exists($table, self::genericTables()) && ! self::productionSyncEnabled()) {
+            return ['applied' => false, 'reason' => 'production sync disabled locally'];
         }
 
         $manifestKey = "$table:$naturalKey";
