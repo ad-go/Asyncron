@@ -197,6 +197,47 @@ class RouteRegistrar
             return service('response')->setStatusCode(200)->setBody("$thisNode's own publicKey set to match its existing signingPrivateKey.\n");
         }, ['filter' => 'session']);
 
+        // Clears ONE peer's stale publicKey locally, so it can re-pair via
+        // cluster/bootstrap-handshake's own "already paired" refusal (see
+        // that method's own docblock) without the collateral damage found
+        // live 2026-09-03: SettingsController::deleteNode() is the only
+        // other way to blank a peer's key today, but it ALSO calls
+        // Cluster::broadcastNodeDelete(), which tells every OTHER peer to
+        // delete THEIR OWN copy of that same node - repairing node1's
+        // stale key on node2 this way silently wiped node3's own,
+        // perfectly good, independent pairing with node1 as a side
+        // effect. This writes .env directly, exactly like updateNode()
+        // does for its own whitelisted fields, and broadcasts nothing.
+        $routes->get('fix-reset-peer-key', static function () {
+            if (! auth()->loggedIn() || ! (auth()->user()?->inGroup('superadmin'))) {
+                return service('response')->setStatusCode(403)->setBody('Superadmin login required.');
+            }
+            if (! class_exists(\AdGo\Cluster\Cluster::class)) {
+                return service('response')->setStatusCode(503)->setBody('ad-go/cluster is not installed.');
+            }
+
+            $peer = (string) service('request')->getGet('peer');
+            if ($peer === '' || preg_match('/^[a-zA-Z0-9_-]+$/', $peer) !== 1) {
+                return service('response')->setStatusCode(422)->setBody("Usage: ?peer=<node name>\n");
+            }
+
+            $cluster = new \AdGo\Cluster\Cluster();
+            $entries = $cluster->allNodes();
+            if (! array_key_exists($peer, $entries)) {
+                return service('response')->setStatusCode(422)->setBody("Unknown peer '$peer'.\n");
+            }
+            if ($peer === $cluster->thisNodeName()) {
+                return service('response')->setStatusCode(422)->setBody("Refusing to reset this node's own key - that would break its own outgoing signing, not just this one pairing.\n");
+            }
+
+            $entries[$peer]['publicKey'] = '';
+            if (! \AdGo\Cluster\ClusterEnvWriter::writeNodes($entries)) {
+                return service('response')->setStatusCode(500)->setBody('Could not write .env.');
+            }
+
+            return service('response')->setStatusCode(200)->setBody("'$peer's stale publicKey cleared locally - it can now re-pair via bootstrap-handshake.\n");
+        }, ['filter' => 'session']);
+
         // Self-service equivalent of `spark queue:retry` - found live
         // 2026-09-02: a peer that's down for a while accumulates failed
         // cluster-files jobs (PushFileJob's own retry budget exhausted),
