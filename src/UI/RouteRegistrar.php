@@ -29,9 +29,10 @@ use CodeIgniter\Router\RouteCollection;
  */
 class RouteRegistrar
 {
-    // Shared by /server-list.json, /start, and the login page's own
-    // "faster node?" banner - one place computing "this node plus every
-    // reachable public peer" instead of three copies drifting apart. See
+    // Shared by /server-list.json, the login page's own "faster node?"
+    // banner, and the host app's own Home::index() (see asyncron.php's
+    // Home.php/index.php templates) - one place computing "this node plus
+    // every reachable public peer" instead of copies drifting apart. See
     // the /server-list.json route below for why 'nat' peers are excluded
     // and why this node's own baseURL (not itself a member of Config\
     // Cluster::$nodes, which holds PEERS only) is added back in.
@@ -60,16 +61,6 @@ class RouteRegistrar
         // own default controller namespace (App\Controllers\...) instead
         // of this package's actual fully-qualified one.
 
-        // Deliberately no second literal 'dashboard' route alongside this
-        // one - found live 2026-08-20: the two collided on CI4's own
-        // implicit route NAME (this route's explicit 'as' => 'dashboard'
-        // vs. the second route's auto-derived name, also 'dashboard'),
-        // which silently made the literal /dashboard URI 404 rather than
-        // erroring at route-registration time. Nothing in this app ever
-        // links to that literal path anyway - every internal link uses
-        // url_to('dashboard'), which resolves via the NAME (registered
-        // here) to this route's own URI ('/'), never a hardcoded
-        // '/dashboard' string.
         // Unauthenticated on purpose - polled by client-side "pick the
         // fastest node" tooling (see asyncron.md) that has no credentials
         // and just needs a fast yes/no on reachability, not app state. A
@@ -213,20 +204,18 @@ class RouteRegistrar
                 ->setBody(json_encode(['servers' => self::servers()], JSON_UNESCAPED_SLASHES));
         });
 
-        // Unauthenticated - the whole point is answering BEFORE anyone
-        // knows which node to trust, same public-entry-point reasoning as
-        // healthz/server-list.json above. Ports C:\ai\server-picker's own
-        // standalone racing page into the app itself (see public/assets/
-        // node-picker.js) instead of that page needing its own separate
-        // hosting - this route serves the identical experience, seeded
-        // server-side from self::servers() so the very first paint already
-        // has the right list with no extra round trip, and auto-redirects
-        // to whichever node answers /healthz first. Landing on '/' from
-        // there lets Shield's own 'session' filter decide login vs
-        // Dashboard - this route never needs to know which one applies.
-        $routes->get('start', static fn () => view('\AdGo\Cluster\UI\Views\start', ['servers' => self::servers()]));
-
-        $routes->get('/', '\AdGo\Cluster\UI\Controllers\Dashboard::index', ['as' => 'dashboard', 'filter' => 'session']);
+        // '/' itself is deliberately NOT registered here - it belongs to
+        // the host app's own app/Controllers/Home.php (see asyncron.php's
+        // own Home.php/index.php templates), an unauthenticated landing
+        // page showing this node's own name, the current session's
+        // connection info, and every cluster peer's live status (ported
+        // from C:\ai\server-picker via public/assets/node-picker.js, the
+        // same script the login page's own "faster node" banner already
+        // shares - see that route's own comment). Dashboard moves to the
+        // literal 'dashboard' URI instead - url_to('dashboard') resolves
+        // through this route's own NAME, so nothing else in this app
+        // needed to change when it stopped owning '/'.
+        $routes->get('dashboard', '\AdGo\Cluster\UI\Controllers\Dashboard::index', ['as' => 'dashboard', 'filter' => 'session']);
         $routes->get('dashboard/network-status', '\AdGo\Cluster\UI\Controllers\Dashboard::networkStatus', ['filter' => 'session']);
         $routes->post('dashboard/restore-conflict', '\AdGo\Cluster\UI\Controllers\Dashboard::restoreConflict', ['as' => 'dashboard.restoreConflict', 'filter' => 'session']);
         $routes->post('locale', '\AdGo\Cluster\UI\Controllers\LocaleController::update', ['as' => 'locale.update']);

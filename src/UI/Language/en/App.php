@@ -200,4 +200,8 @@ return [
     'fasterNodeAvailable' => '{0} answers faster right now.',
     'switchThere' => 'Switch there',
     'dismiss' => 'Dismiss',
+    'connectedAs' => 'Connected as {0}.',
+    'notConnected' => 'Not connected.',
+    'goToDashboard' => 'Dashboard',
+    'clusterNodes' => 'Cluster nodes',
 ];

@@ -218,16 +218,21 @@ GET routes (see `RouteRegistrar::register()`):
 
 The actual racing logic (`public/assets/node-picker.js`) is shared by two consumers:
 
-- **`/start`** - an unauthenticated, full-page landing spot: races every known server against
-  `/healthz`, seeded server-side from `RouteRegistrar::servers()` so the first paint already has
-  the right list, and auto-redirects to whichever answers first (landing on `/` there lets
-  Shield's own `session` filter decide login vs Dashboard). Offline fallback (retry / manual URL)
-  when nothing answers. Bookmark this instead of any one specific node's URL.
+- **`/` (the site root)** - `App\Controllers\Home`/`app/Views/index.php`, ad-go/asyncron's own
+  replacement for appstarter's stock Home controller and "Welcome to CodeIgniter 4!" view (see
+  asyncron.php's own install-time copy/delete of these - `RouteRegistrar` deliberately does NOT
+  register `/` itself; Dashboard lives at the literal `dashboard` URI instead). Deliberately thin:
+  this node's own name, the current session's connection info (logged in as X, or a login link),
+  and every cluster peer with its live `/healthz` status filled in client-side - no auto-redirect,
+  since this IS the permanent home now, not a transient "find any node then leave" splash. A
+  logged-in visitor switching nodes already has its own deliberate, opt-in path (the "Auto" toggle
+  + cross-node SSO handoff - see `AuthController::fastestNodeRedirect()`); this list is for
+  manually picking a different one.
 - **The login page** - a non-intrusive counterpart: since you're already looking at a page that
-  answered, there's nothing to fall back FROM the way `/start` handles a dead node. It probes every
-  known server anyway and shows a dismissible banner ("X answers faster right now" + a link) only
-  when a peer beats this node's own latency by a real margin (150ms) - never an automatic redirect
-  away from a form you may already be filling in.
+  answered, there's nothing to fall back FROM. It probes every known server anyway and shows a
+  dismissible banner ("X answers faster right now" + a link) only when a peer beats this node's own
+  latency by a real margin (150ms) - never an automatic redirect away from a form you may already
+  be filling in.
 
 ## Not built yet
 

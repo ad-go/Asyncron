@@ -200,4 +200,8 @@ return [
     'fasterNodeAvailable' => '{0} răspunde mai rapid chiar acum.',
     'switchThere' => 'Comută acolo',
     'dismiss' => 'Ascunde',
+    'connectedAs' => 'Conectat ca {0}.',
+    'notConnected' => 'Neconectat.',
+    'goToDashboard' => 'Dashboard',
+    'clusterNodes' => 'Noduri cluster',
 ];
