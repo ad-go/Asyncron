@@ -40,8 +40,14 @@ use Throwable;
  *
  *   php spark cluster:import-production --from=node1
  *
- * Web equivalent: RouteRegistrar's own fix-import-production route (same
- * guards, for a node with no shell access).
+ * The real algorithm lives in import() below, not run() - found live
+ * 2026-09-04: RouteRegistrar's own fix-import-production route (the web
+ * equivalent, for a node with no shell access) went through run()/
+ * command(), but CLI::write()'s own fwrite(STDOUT, ...) goes nowhere
+ * useful under php-fpm, so every per-table result (including WHY one
+ * failed) was invisible from the web route - run() calls import() and
+ * echoes its log via CLI::write() for a real terminal; the route calls
+ * import() directly and returns the same log as JSON instead.
  */
 class ImportProductionCommand extends BaseCommand
 {
@@ -65,45 +71,68 @@ class ImportProductionCommand extends BaseCommand
 
     public function run(array $params)
     {
+        $from = (string) (CLI::getOption('from') ?? ($params['from'] ?? ''));
+
+        foreach ($this->import($from) as $line) {
+            CLI::write('cluster:import-production: ' . $line['message'], $line['ok'] ? 'green' : 'red');
+        }
+    }
+
+    /**
+     * @return list<array{ok: bool, message: string}> one entry per step,
+     *                                                 in the order they
+     *                                                 happened - the full
+     *                                                 log, not just
+     *                                                 failures, so a
+     *                                                 caller can show
+     *                                                 real progress, not
+     *                                                 only errors
+     */
+    public function import(string $from): array
+    {
         // Same reasoning asyncron.php's own long-running steps already
-        // use - a web-triggered run (fix-import-production) must survive
-        // past whatever timeout the client/proxy gives up at, since the
-        // alternative is a half-cloned table with no way to tell from
-        // outside whether it's still working or dead.
+        // use - a web-triggered run must survive past whatever timeout
+        // the client/proxy gives up at, since the alternative is a half-
+        // cloned table with no way to tell from outside whether it's
+        // still working or dead.
         set_time_limit(0);
         ignore_user_abort(true);
 
-        $from = (string) (CLI::getOption('from') ?? ($params['from'] ?? ''));
-        if ($from === '') {
-            CLI::write('cluster:import-production: --from=<peer name> is required.', 'red');
+        $log = [];
+        $add = static function (bool $ok, string $message) use (&$log): void {
+            $log[] = ['ok' => $ok, 'message' => $message];
+        };
 
-            return;
+        if ($from === '') {
+            $add(false, '--from=<peer name> is required.');
+
+            return $log;
         }
 
         if (! DbSyncSchema::productionSyncEnabled()) {
-            CLI::write('cluster:import-production: Production sync is off on this node - turn it on first.', 'red');
+            $add(false, 'Production sync is off on this node - turn it on first.');
 
-            return;
+            return $log;
         }
         if (DbSyncSchema::productionSourceNodeEnabled()) {
-            CLI::write('cluster:import-production: this node is itself the Source node - refusing to overwrite it.', 'red');
+            $add(false, 'this node is itself the Source node - refusing to overwrite it.');
 
-            return;
+            return $log;
         }
 
         $group = trim(config('Cluster')->dbSyncGroup);
         if ($group === '') {
-            CLI::write("cluster:import-production: Config\\Cluster::\$dbSyncGroup is not configured.", 'red');
+            $add(false, "Config\\Cluster::\$dbSyncGroup is not configured.");
 
-            return;
+            return $log;
         }
 
         $cluster = new Cluster();
         $peer    = $cluster->node($from);
         if ($peer === null) {
-            CLI::write("cluster:import-production: unknown peer '$from'.", 'red');
+            $add(false, "unknown peer '$from'.");
 
-            return;
+            return $log;
         }
 
         $client = $cluster->peerClient((string) $peer['baseURL'], 30);
@@ -113,44 +142,47 @@ class ImportProductionCommand extends BaseCommand
                 'headers' => ['Authorization' => $cluster->authHeader()],
             ]);
         } catch (Throwable $e) {
-            CLI::write("cluster:import-production: could not reach $from - " . $e->getMessage(), 'red');
+            $add(false, "could not reach $from - " . $e->getMessage());
 
-            return;
+            return $log;
         }
         if ($response->getStatusCode() !== 200) {
-            CLI::write("cluster:import-production: $from returned HTTP {$response->getStatusCode()} - is \"Source node\" turned on there?", 'red');
+            $add(false, "$from returned HTTP {$response->getStatusCode()} ({$response->getBody()}) - is \"Source node\" turned on there?");
 
-            return;
+            return $log;
         }
         $schemas = (array) (json_decode($response->getBody(), true)['tables'] ?? []);
         if ($schemas === []) {
-            CLI::write("cluster:import-production: $from reports no tables to clone.", 'yellow');
+            $add(false, "$from reports no tables to clone.");
 
-            return;
+            return $log;
         }
 
         $db        = db_connect($group);
         $totalRows = 0;
 
         foreach ($schemas as $table => $createStatement) {
-            CLI::write("cluster:import-production: $table - dropping and recreating...", 'yellow');
-
             try {
                 $db->query('DROP TABLE IF EXISTS ' . $db->escapeIdentifiers($table));
                 $db->query((string) $createStatement);
             } catch (Throwable $e) {
-                CLI::write("cluster:import-production: $table - could not (re)create - " . $e->getMessage(), 'red');
+                $add(false, "$table - could not (re)create - " . $e->getMessage());
 
                 continue;
             }
 
-            $tableRows = $this->copyTableRows($client, $cluster, $db, $table);
+            [$tableRows, $rowErrors] = $this->copyTableRows($client, $cluster, $db, $table);
             $totalRows += $tableRows;
+            foreach ($rowErrors as $error) {
+                $add(false, "$table - $error");
+            }
 
-            CLI::write("cluster:import-production: $table - $tableRows row(s) copied.", 'green');
+            $add(true, "$table - $tableRows row(s) copied.");
         }
 
-        CLI::write('cluster:import-production: done - ' . count($schemas) . " table(s), $totalRows row(s) total from $from.", 'green');
+        $add(true, 'done - ' . count($schemas) . " table(s), $totalRows row(s) total from $from.");
+
+        return $log;
     }
 
     /**
@@ -160,11 +192,14 @@ class ImportProductionCommand extends BaseCommand
      * viable approach for a table the size of po_products (tens of
      * thousands of rows) without risking a memory-limit fatal partway
      * through.
+     *
+     * @return array{0: int, 1: list<string>} rows copied, error messages
      */
-    private function copyTableRows(CURLRequest $client, Cluster $cluster, ConnectionInterface $db, string $table): int
+    private function copyTableRows(CURLRequest $client, Cluster $cluster, ConnectionInterface $db, string $table): array
     {
         $offset    = 0;
         $tableRows = 0;
+        $errors    = [];
 
         while (true) {
             try {
@@ -173,12 +208,12 @@ class ImportProductionCommand extends BaseCommand
                     'query'   => ['table' => $table, 'offset' => $offset, 'limit' => self::PAGE_SIZE],
                 ]);
             } catch (Throwable $e) {
-                CLI::write("cluster:import-production: $table - fetch failed at offset $offset - " . $e->getMessage(), 'red');
+                $errors[] = "fetch failed at offset $offset - " . $e->getMessage();
 
                 break;
             }
             if ($rowsResponse->getStatusCode() !== 200) {
-                CLI::write("cluster:import-production: $table - fetch failed at offset $offset - HTTP {$rowsResponse->getStatusCode()}", 'red');
+                $errors[] = "fetch failed at offset $offset - HTTP {$rowsResponse->getStatusCode()}";
 
                 break;
             }
@@ -191,7 +226,7 @@ class ImportProductionCommand extends BaseCommand
             try {
                 $db->table($table)->insertBatch($rows);
             } catch (Throwable $e) {
-                CLI::write("cluster:import-production: $table - insert failed at offset $offset - " . $e->getMessage(), 'red');
+                $errors[] = "insert failed at offset $offset - " . $e->getMessage();
 
                 break;
             }
@@ -204,6 +239,6 @@ class ImportProductionCommand extends BaseCommand
             }
         }
 
-        return $tableRows;
+        return [$tableRows, $errors];
     }
 }

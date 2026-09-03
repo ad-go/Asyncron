@@ -367,23 +367,18 @@ class RouteRegistrar
                 return service('response')->setStatusCode(422)->setBody("Usage: ?from=<source node name>\n");
             }
 
-            set_time_limit(0);
-            ignore_user_abort(true);
+            // Calls ImportProductionCommand::import() directly rather
+            // than going through command()/run() - found live
+            // 2026-09-04: CLI::write()'s own fwrite(STDOUT, ...) goes
+            // nowhere useful under php-fpm, so routing through the CLI
+            // wrapper made every per-table result (including WHY one
+            // failed) invisible here; import() returns the same log as a
+            // plain array instead, which this can actually show.
+            $log = (new \AdGo\Cluster\Commands\ImportProductionCommand(service('logger'), service('commands')))->import($from);
 
-            ob_start();
-            // Space, not '=' - found live 2026-09-04: command()'s own
-            // tokenizer (see its own docblock, ported from Symfony's
-            // StringInput) has no '--opt=value' handling at all, only
-            // '--opt value' as two separate tokens; '--from=node1' was
-            // silently parsed as ONE param literally named 'from=node1'
-            // with a null value, so CLI::getOption('from') always came
-            // back empty and the command exited on its own first guard -
-            // instantly, silently (CLI::write() output goes nowhere here
-            // either), looking indistinguishable from a real no-op.
-            command('cluster:import-production --from ' . $from);
-            $output = ob_get_clean();
+            $lines = array_map(static fn (array $l): string => ($l['ok'] ? '[ok] ' : '[FAIL] ') . $l['message'], $log);
 
-            return service('response')->setStatusCode(200)->setBody($output !== '' ? $output : "cluster:import-production completed - check fix-list-production-tables to confirm what landed.\n");
+            return service('response')->setStatusCode(200)->setBody(implode("\n", $lines) . "\n");
         }, ['filter' => 'session']);
 
         // Read-only companion to fix-retry-failed-queue above - that route
