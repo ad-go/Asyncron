@@ -111,6 +111,19 @@
                            <?= $productionSyncEnabled ? 'checked' : '' ?>>
                     <span class="form-check-label"><?= lang('App.productionSyncToggle') ?></span>
                 </label>
+                <!-- "Source node" - see DbSyncSchema::productionSourceNodeEnabled()'s
+                     own docblock. Disabled (not just unchecked) whenever
+                     Production sync above is off - settings-node-status.js's
+                     own change handler on that toggle keeps this in sync
+                     live, without a page reload, the moment production sync
+                     itself gets flipped either way. -->
+                <label class="form-check form-switch mb-0 mt-2">
+                    <input class="form-check-input" type="checkbox" id="production-source-node-toggle"
+                           data-endpoint="<?= url_to('settings.updateProductionSourceNode') ?>"
+                           <?= $productionSourceNode ? 'checked' : '' ?>
+                           <?= $productionSyncEnabled ? '' : 'disabled' ?>>
+                    <span class="form-check-label"><?= lang('App.productionSourceNodeToggle') ?></span>
+                </label>
                 <!-- Read-only status for Config\Cluster::$requireSignedAuth -
                      see SettingsController::index()'s own comment on why
                      this is a display-only badge, not a toggle: the flag is

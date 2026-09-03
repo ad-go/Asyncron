@@ -371,6 +371,30 @@ class DbSyncSchema
     }
 
     /**
+     * Per-node "this is the authoritative copy" flag for $dbSyncGroup's
+     * data - a plain stored preference, same mechanism as
+     * productionSyncEnabled() above and not yet read anywhere else in
+     * this class; nothing in the sync engine currently branches on it.
+     * Deliberately can't be true while productionSyncEnabled() is false -
+     * checked here, not just in the Settings UI (which additionally
+     * disables the checkbox itself so this never has to be relied on
+     * alone - see the Settings view's own "Source node" toggle), so a
+     * value written any other way (an import, a stale row from before
+     * sync was turned off) never accidentally reads back as true.
+     */
+    public static function productionSourceNodeEnabled(): bool
+    {
+        if (! self::productionSyncEnabled()) {
+            return false;
+        }
+
+        $thisNode = (string) config('Cluster')->thisNode;
+        $value    = service('settings')->get('Cluster.productionSourceNode', $thisNode);
+
+        return $value === '1';
+    }
+
+    /**
      * @return array{class: string, key: string, value: string, type: string, context: string, created_at?: string, updated_at?: string}|null
      */
     public static function exportSetting(ConnectionInterface $db, string $class, string $key, string $context): ?array

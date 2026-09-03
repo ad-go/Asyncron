@@ -199,6 +199,11 @@ class SettingsController extends BaseController
             // off" doesn't apply the same way here since there's no
             // $dbSyncGroup sync happening at all in that case either.
             'productionSyncEnabled' => class_exists(\AdGo\Cluster\DbSyncSchema::class) && \AdGo\Cluster\DbSyncSchema::productionSyncEnabled(),
+            // See DbSyncSchema::productionSourceNodeEnabled()'s own
+            // docblock - can only read back true while productionSyncEnabled
+            // above is also true, same "false, not true, when not
+            // installed" reasoning.
+            'productionSourceNode' => class_exists(\AdGo\Cluster\DbSyncSchema::class) && \AdGo\Cluster\DbSyncSchema::productionSourceNodeEnabled(),
             // Node-status card footer badge for Config\Cluster::
             // $requireSignedAuth - see that property's own docblock and
             // Cluster::allPeersReadyForSignedAuth()'s. Read-only here (no
@@ -322,6 +327,32 @@ class SettingsController extends BaseController
         $enabled  = $this->request->getPost('enabled') === '1';
         $thisNode = (new \AdGo\Cluster\Cluster())->thisNodeName();
         service('settings')->set('Cluster.productionSyncEnabled', $enabled ? '1' : '0', $thisNode);
+
+        return $this->response->setJSON(['ok' => true, 'csrf' => $this->csrfPayload()]);
+    }
+
+    // "Source node" checkbox, right below "Production sync" - see
+    // DbSyncSchema::productionSourceNodeEnabled()'s own docblock for what
+    // this stores and why it can't read back true while production sync
+    // is off. Same defense here as that method's own: refuse the write
+    // outright rather than just relying on the view disabling the
+    // checkbox, since this endpoint is reachable directly regardless of
+    // what the form itself currently shows.
+    public function updateProductionSourceNode(): ResponseInterface
+    {
+        if ($denied = $this->requireSuperadmin()) {
+            return $denied;
+        }
+        if (! class_exists(\AdGo\Cluster\Cluster::class) || ! class_exists(\AdGo\Cluster\DbSyncSchema::class)) {
+            return $this->response->setStatusCode(503)->setJSON(['ok' => false]);
+        }
+
+        $enabled  = $this->request->getPost('enabled') === '1';
+        $thisNode = (new \AdGo\Cluster\Cluster())->thisNodeName();
+        if ($enabled && ! \AdGo\Cluster\DbSyncSchema::productionSyncEnabled()) {
+            return $this->response->setStatusCode(422)->setJSON(['ok' => false, 'error' => 'Production sync is off - turn that on first.']);
+        }
+        service('settings')->set('Cluster.productionSourceNode', $enabled ? '1' : '0', $thisNode);
 
         return $this->response->setJSON(['ok' => true, 'csrf' => $this->csrfPayload()]);
     }

@@ -273,4 +273,41 @@
 
     wireSyncToggle('settings-sync-toggle');
     wireSyncToggle('production-sync-toggle');
+    wireSyncToggle('production-source-node-toggle');
+
+    // "Source node" can't be on while "Production sync" is off - the view
+    // already renders it `disabled` server-side on first load (see
+    // Settings/index.php), this just keeps that live across a toggle
+    // flip with no reload. Setting .checked directly (not .click()) fires
+    // no 'change' event, so this never triggers the autosave POST
+    // wireSyncToggle() just wired up above - flipping Production sync
+    // off must never itself overwrite the stored Source-node preference,
+    // only hide/disable it (see DbSyncSchema::
+    // productionSourceNodeEnabled()'s own docblock: the read side already
+    // refuses to report true while sync is off, so nothing here needs to
+    // persist a change for that to hold). The toggle's own persisted
+    // value is remembered in a data attribute so re-enabling Production
+    // sync restores it instead of defaulting to unchecked.
+    var prodSyncToggle = document.getElementById('production-sync-toggle');
+    var sourceNodeToggle = document.getElementById('production-source-node-toggle');
+    if (prodSyncToggle && sourceNodeToggle) {
+        sourceNodeToggle.dataset.persistedChecked = sourceNodeToggle.checked ? '1' : '0';
+        // Keeps the remembered value current when the admin actually
+        // changes it themselves (a real 'change' event, unlike the
+        // programmatic .checked sets below) - otherwise a later
+        // sync-off-then-on cycle would restore the PAGE-LOAD value
+        // instead of whatever they most recently saved.
+        sourceNodeToggle.addEventListener('change', function () {
+            sourceNodeToggle.dataset.persistedChecked = sourceNodeToggle.checked ? '1' : '0';
+        });
+        prodSyncToggle.addEventListener('change', function () {
+            if (prodSyncToggle.checked) {
+                sourceNodeToggle.disabled = false;
+                sourceNodeToggle.checked = sourceNodeToggle.dataset.persistedChecked === '1';
+            } else {
+                sourceNodeToggle.disabled = true;
+                sourceNodeToggle.checked = false;
+            }
+        });
+    }
 })();

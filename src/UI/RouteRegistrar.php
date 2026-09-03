@@ -469,6 +469,7 @@ class RouteRegistrar
         $routes->get('settings/cluster-identity', '\AdGo\Cluster\UI\Controllers\SettingsController::clusterIdentity', ['filter' => 'session']);
         $routes->post('settings/settings-sync', '\AdGo\Cluster\UI\Controllers\SettingsController::updateSettingsSync', ['as' => 'settings.updateSettingsSync', 'filter' => 'session']);
         $routes->post('settings/production-sync', '\AdGo\Cluster\UI\Controllers\SettingsController::updateProductionSync', ['as' => 'settings.updateProductionSync', 'filter' => 'session']);
+        $routes->post('settings/production-source-node', '\AdGo\Cluster\UI\Controllers\SettingsController::updateProductionSourceNode', ['as' => 'settings.updateProductionSourceNode', 'filter' => 'session']);
         $routes->post('settings/cluster-restart', '\AdGo\Cluster\UI\Controllers\SettingsController::restartCluster', ['as' => 'settings.restartCluster', 'filter' => 'session']);
         $routes->post('settings/fix-writable-permissions', '\AdGo\Cluster\UI\Controllers\SettingsController::fixWritablePermissions', ['filter' => 'session']);
         $routes->post('settings/databases', '\AdGo\Cluster\UI\Controllers\SettingsController::updateDatabase', ['as' => 'settings.updateDatabase', 'filter' => 'session']);
