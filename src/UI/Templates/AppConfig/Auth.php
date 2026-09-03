@@ -463,7 +463,24 @@ class Auth extends ShieldAuth
     public function loginRedirect(): string
     {
         $session = session();
-        $url     = $session->getTempdata('beforeLoginUrl') ?? setting('Auth.redirects')['login'];
+        $url     = $session->getTempdata('beforeLoginUrl');
+
+        // Only trust a stashed return-to URL when it's a real page a
+        // browser can land on - never one of this app's many fetch()-only
+        // JSON endpoints (settings/node-status, dashboard/network-status,
+        // users/list, ...). Found live 2026-09-04: a session expiring
+        // while settings-node-status.js's 5s poll hit settings/node-status
+        // stashed THAT as beforeLoginUrl (Shield's own SessionAuth filter
+        // stashes current_url() unconditionally on any blocked request,
+        // page or AJAX alike), so the next successful login landed on a
+        // bare JSON response instead of an actual page. Allowlisting the
+        // small, stable set of real pages this app has (rather than
+        // blocklisting every JSON endpoint, which would need updating as
+        // more get added) closes this for all of them at once.
+        $path = $url !== null ? (string) parse_url($url, PHP_URL_PATH) : '';
+        if ($url === null || preg_match('#^/(dashboard|settings|profile|users(/\d+)?)/?$#', $path) !== 1) {
+            $url = setting('Auth.redirects')['login'];
+        }
 
         return $this->getUrl($url);
     }
