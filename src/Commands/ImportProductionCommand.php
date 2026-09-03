@@ -162,12 +162,8 @@ class ImportProductionCommand extends BaseCommand
         $totalRows = 0;
 
         foreach ($schemas as $table => $createStatement) {
-            try {
-                $db->query('DROP TABLE IF EXISTS ' . $db->escapeIdentifiers($table));
-                $db->query((string) $createStatement);
-            } catch (Throwable $e) {
-                $add(false, "$table - could not (re)create - " . $e->getMessage());
-
+            $created = $this->createTable($db, $table, (string) $createStatement, $add);
+            if (! $created) {
                 continue;
             }
 
@@ -183,6 +179,49 @@ class ImportProductionCommand extends BaseCommand
         $add(true, 'done - ' . count($schemas) . " table(s), $totalRows row(s) total from $from.");
 
         return $log;
+    }
+
+    /**
+     * DROP + CREATE, with one specific fallback: found live 2026-09-04,
+     * cloning FROM a newer MySQL (8.0.30+, which added the Unicode-CLDR
+     * *_uca1400_* collations) ONTO an older one (5.7, which has never
+     * heard of them) fails outright with "Unknown collation" - the
+     * source's own CREATE TABLE statement is otherwise perfectly valid,
+     * just naming a collation this specific destination's MySQL build
+     * doesn't ship. Retried exactly once, with every collation name in
+     * the statement replaced by utf8mb4_general_ci (supported since
+     * MySQL 5.5, the actual byte-comparison semantics don't matter for
+     * anything this project's own tables rely on) - a real behavior
+     * change to that table's own string comparisons, worth knowing about,
+     * which is why this reports it as a distinct log line rather than
+     * silently swallowing the substitution.
+     */
+    private function createTable(ConnectionInterface $db, string $table, string $createStatement, callable $add): bool
+    {
+        try {
+            $db->query('DROP TABLE IF EXISTS ' . $db->escapeIdentifiers($table));
+            $db->query($createStatement);
+
+            return true;
+        } catch (Throwable $e) {
+            if (! str_contains($e->getMessage(), 'Unknown collation')) {
+                $add(false, "$table - could not (re)create - " . $e->getMessage());
+
+                return false;
+            }
+        }
+
+        $fallback = preg_replace('/utf8mb4_[a-z0-9_]+/i', 'utf8mb4_general_ci', $createStatement);
+        try {
+            $db->query((string) $fallback);
+            $add(true, "$table - recreated with utf8mb4_general_ci (source collation not supported by this node's MySQL build).");
+
+            return true;
+        } catch (Throwable $e) {
+            $add(false, "$table - could not (re)create even with a collation fallback - " . $e->getMessage());
+
+            return false;
+        }
     }
 
     /**
