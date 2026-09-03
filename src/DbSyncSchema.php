@@ -741,6 +741,92 @@ class DbSyncSchema
     }
 
     /**
+     * Every CREATE TABLE statement for $dbSyncGroup's real database,
+     * verbatim from the driver itself (MySQL's own SHOW CREATE TABLE) -
+     * not reconstructed from getFieldData()/getIndexData(), which would
+     * need to perfectly re-derive every driver-specific detail (engine,
+     * charset, exact index definitions, auto_increment start value) to be
+     * safe to replay elsewhere. Feeds Commands\ImportProductionCommand's
+     * own schema-clone step - see that class's own docblock for the full
+     * algorithm and its safety guards. Every table regardless of
+     * genericTables()' own natural-key eligibility - a full clone needs
+     * the autoincrement-keyed tables that engine deliberately excludes
+     * too, not just the ones the incremental merge path can handle.
+     *
+     * @return array<string, string> table name => CREATE TABLE statement
+     */
+    public static function productionTableSchemas(): array
+    {
+        $group = trim(config('Cluster')->dbSyncGroup);
+        if ($group === '') {
+            return [];
+        }
+
+        try {
+            $db = db_connect($group);
+            if ($db->DBDriver !== 'MySQLi') {
+                return []; // SHOW CREATE TABLE is MySQL-specific
+            }
+            $tableList = $db->listTables();
+        } catch (\Throwable $e) {
+            return [];
+        }
+
+        $schemas = [];
+        foreach ($tableList as $table) {
+            try {
+                $row = $db->query('SHOW CREATE TABLE ' . $db->escapeIdentifiers($table))->getRowArray();
+                if ($row !== null && isset($row['Create Table'])) {
+                    $schemas[$table] = (string) $row['Create Table'];
+                }
+            } catch (\Throwable $e) {
+                continue;
+            }
+        }
+
+        return $schemas;
+    }
+
+    /**
+     * One page of raw rows from $dbSyncGroup's real database, for
+     * Commands\ImportProductionCommand's own bulk-copy loop - no natural-
+     * key/updated_at requirement here (unlike genericTables()'s own
+     * eligibility check), same "every table, not just the sync-eligible
+     * ones" reasoning as productionTableSchemas() above. Ordered by the
+     * table's own primary key when it has a single-column one (irrelevant
+     * for correctness - every row is fetched exactly once across all
+     * pages regardless of order - but keeps repeated offset-paged calls
+     * against a changing table from skipping/duplicating rows near page
+     * boundaries).
+     *
+     * @return list<array<string, mixed>>
+     */
+    public static function productionTableRows(string $table, int $offset, int $limit): array
+    {
+        $group = trim(config('Cluster')->dbSyncGroup);
+        if ($group === '') {
+            return [];
+        }
+
+        try {
+            $db = db_connect($group);
+            if (! in_array($table, $db->listTables(), true)) {
+                return [];
+            }
+
+            $keyInfo = self::inspectTableKey($db, $table);
+            $builder = $db->table($table);
+            if ($keyInfo['keyColumn'] !== null) {
+                $builder->orderBy($keyInfo['keyColumn'], 'ASC');
+            }
+
+            return $builder->limit($limit, $offset)->get()->getResultArray();
+        } catch (\Throwable $e) {
+            return [];
+        }
+    }
+
+    /**
      * The connection $dbSyncGroup's own discovered tables actually live
      * in - deliberately ignores whatever $db a caller passes to
      * exportAllGenericKeys()/exportGenericRow()/applyGenericSnapshot()

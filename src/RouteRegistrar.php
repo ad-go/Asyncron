@@ -106,6 +106,22 @@ class RouteRegistrar
             '\AdGo\Cluster\Controllers\DbSyncController::blockRows',
             ['filter' => 'cluster-auth']
         );
+        // Commands\ImportProductionCommand's own clone path - a "Source
+        // node"-only pair (see DbSyncController::productionSchema()'s own
+        // docblock), separate from the bulk-catch-up pair above: those
+        // serve genericTables()' natural-key-eligible subset for the
+        // incremental engine's own LWW merge, these serve EVERY table
+        // (autoincrement-keyed ones included) for a full wipe-and-clone.
+        $routes->get(
+            'cluster/production-schema',
+            '\AdGo\Cluster\Controllers\DbSyncController::productionSchema',
+            ['filter' => 'cluster-auth']
+        );
+        $routes->get(
+            'cluster/production-rows',
+            '\AdGo\Cluster\Controllers\DbSyncController::productionRows',
+            ['filter' => 'cluster-auth']
+        );
 
         // Long-poll pull - see LongPollController::poll()'s own docblock.
         // POST (not GET, unlike the other pull-* routes above): carries

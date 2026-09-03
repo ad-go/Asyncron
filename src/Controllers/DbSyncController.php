@@ -117,4 +117,43 @@ class DbSyncController extends Controller
 
         return $this->response->setJSON(['rows' => $rows]);
     }
+
+    /**
+     * Step 1 of Commands\ImportProductionCommand's own clone flow - every
+     * CREATE TABLE statement for THIS node's real Config\Cluster::
+     * $dbSyncGroup database. Only served when this node is itself marked
+     * the "Source node" (see DbSyncSchema::productionSourceNodeEnabled()'s
+     * own docblock) - a peer has no business cloning FROM a node that
+     * isn't the one an admin actually designated as authoritative, even
+     * if that peer somehow already has this endpoint's URL.
+     */
+    public function productionSchema(): ResponseInterface
+    {
+        if (! DbSyncSchema::productionSourceNodeEnabled()) {
+            return $this->response->setStatusCode(403)->setJSON(['error' => 'not a source node']);
+        }
+
+        return $this->response->setJSON(['tables' => DbSyncSchema::productionTableSchemas()]);
+    }
+
+    /**
+     * Step 2 - one page of raw rows for ONE table, same source-node gate
+     * as productionSchema() above. Deliberately a flat array of column =>
+     * value (not the {naturalKey, payload, timestamp} shape blockRows()
+     * above uses) - a full clone copies every column of every row
+     * verbatim, including whatever autoincrement id the source has,
+     * unlike the incremental engine's own natural-key/LWW bookkeeping.
+     */
+    public function productionRows(): ResponseInterface
+    {
+        if (! DbSyncSchema::productionSourceNodeEnabled()) {
+            return $this->response->setStatusCode(403)->setJSON(['error' => 'not a source node']);
+        }
+
+        $table  = (string) $this->request->getGet('table');
+        $offset = max(0, (int) $this->request->getGet('offset'));
+        $limit  = min(5000, max(1, (int) $this->request->getGet('limit')));
+
+        return $this->response->setJSON(['rows' => DbSyncSchema::productionTableRows($table, $offset, $limit)]);
+    }
 }

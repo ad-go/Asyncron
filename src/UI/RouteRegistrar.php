@@ -342,6 +342,41 @@ class RouteRegistrar
             return service('response')->setStatusCode(200)->setBody($output !== '' ? $output : "cluster:sync-db --bootstrap completed with no output.\n");
         }, ['filter' => 'session']);
 
+        // Web trigger for Commands\ImportProductionCommand - same guards,
+        // for a node with no shell access. See that class's own docblock
+        // for the full algorithm (drop+recreate+bulk-copy every table
+        // from the named "Source node" peer) and why this is a genuinely
+        // different, more destructive operation than fix-bootstrap-
+        // production above (that one merges into what's already there;
+        // this one replaces it outright). CLI::write()'s own progress
+        // lines don't reach this response (they write straight to STDOUT,
+        // which php-fpm doesn't capture the way a real CLI process's
+        // caller would) - check fix-list-production-tables afterward to
+        // confirm what actually landed, same as this route's own command
+        // class recommends in its CLI usage.
+        $routes->get('fix-import-production', static function () {
+            if ($denied = self::requireSuperadmin()) {
+                return $denied;
+            }
+            if (! class_exists(\AdGo\Cluster\Cluster::class) || ! class_exists(\AdGo\Cluster\DbSyncSchema::class)) {
+                return service('response')->setStatusCode(503)->setBody('ad-go/cluster is not installed.');
+            }
+
+            $from = (string) service('request')->getGet('from');
+            if ($from === '' || preg_match('/^[a-zA-Z0-9_-]+$/', $from) !== 1) {
+                return service('response')->setStatusCode(422)->setBody("Usage: ?from=<source node name>\n");
+            }
+
+            set_time_limit(0);
+            ignore_user_abort(true);
+
+            ob_start();
+            command('cluster:import-production --from=' . $from);
+            $output = ob_get_clean();
+
+            return service('response')->setStatusCode(200)->setBody($output !== '' ? $output : "cluster:import-production completed - check fix-list-production-tables to confirm what landed.\n");
+        }, ['filter' => 'session']);
+
         // Read-only companion to fix-retry-failed-queue above - that route
         // says HOW MANY jobs failed, never WHY, and there's no admin UI or
         // shell access here to read queue_jobs_failed's own 'exceptions'
