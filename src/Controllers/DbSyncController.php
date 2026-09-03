@@ -70,7 +70,7 @@ class DbSyncController extends Controller
     public function blockHashes(): ResponseInterface
     {
         $table = (string) $this->request->getGet('table');
-        if (! in_array($table, ['users', 'settings'], true) && ! array_key_exists($table, DbSyncSchema::genericTables())) {
+        if (! in_array($table, ['users', 'settings'], true) && ! array_key_exists($table, DbSyncSchema::genericTables()) && ! array_key_exists($table, DbSyncSchema::genericIdBasedTables())) {
             return $this->response->setStatusCode(400)->setJSON(['error' => 'unknown table']);
         }
 
@@ -97,7 +97,7 @@ class DbSyncController extends Controller
         // (see SyncDbCommand::bootstrap()) could NEVER be resolved -
         // blockHashes() would report the mismatch but this endpoint would
         // 400 on step 2, every time.
-        if (! in_array($table, ['users', 'settings'], true) && ! array_key_exists($table, DbSyncSchema::genericTables())) {
+        if (! in_array($table, ['users', 'settings'], true) && ! array_key_exists($table, DbSyncSchema::genericTables()) && ! array_key_exists($table, DbSyncSchema::genericIdBasedTables())) {
             return $this->response->setStatusCode(400)->setJSON(['error' => 'unknown table']);
         }
 

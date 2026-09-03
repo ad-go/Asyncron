@@ -16,20 +16,19 @@
         });
     }
 
-    // ELIGIBLE_COLOR/INELIGIBLE_COLOR match the legend dots rendered next
-    // to this chart in the partial - a table's color here is its own
-    // syncEligible flag, not a health/status signal like the node tree's
-    // colors are (see dashboard-node-tree.js), so it's kept local rather
-    // than shared via window.
-    var ELIGIBLE_COLOR   = '#2fb344';
-    var INELIGIBLE_COLOR = '#adb5bd';
+    // Match the legend dots rendered next to this chart in the partial -
+    // a table's color here is its own syncMode, not a health/status
+    // signal like the node tree's colors are (see dashboard-node-tree.js),
+    // so it's kept local rather than shared via window.
+    var MODE_COLORS = { merge: '#2fb344', 'source-only': '#4299e1', none: '#adb5bd' };
+    var MODE_LABELS = { merge: 'modeMerge', 'source-only': 'modeSourceOnly', none: 'modeNone' };
 
     var children = tableNames.map(function (name) {
         var t = tables[name];
         return {
             name: name,
             value: t,
-            itemStyle: { color: t.syncEligible ? ELIGIBLE_COLOR : INELIGIBLE_COLOR },
+            itemStyle: { color: MODE_COLORS[t.syncMode] || MODE_COLORS.none },
             symbolSize: 14,
         };
     });
@@ -59,7 +58,7 @@
                     strings.size + ': ' + escapeHtml(t.sizeHuman || strings.unknown),
                     strings.autoIncrement + ': ' + (t.hasAutoIncrementKey ? strings.yes : strings.no),
                     strings.updatedAt + ': ' + (t.hasUpdatedAt ? strings.yes : strings.no),
-                    strings.syncEligible + ': ' + (t.syncEligible ? strings.yes : strings.no),
+                    strings.syncEligible + ': ' + escapeHtml(strings[MODE_LABELS[t.syncMode]] || strings.modeNone),
                 ].join('<br>');
             },
         },

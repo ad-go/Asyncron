@@ -4,11 +4,13 @@
      dashboard-user.php both include this same partial rather than each
      carrying their own copy). Tree root = the real database name/size
      Config\Cluster::$dbSyncGroup points at; each leaf is one table, colored
-     by whether it actually qualifies for sync (see genericTables()'s own
-     "single non-integer key + updated_at" requirement) so an admin can see
-     both what's syncing and why anything isn't, at a glance - the table
-     below repeats the same per-table facts in a form that doesn't need a
-     hover to read. -->
+     by its own sync mode - green "merge" (genericTables()' own natural-
+     key/updated_at eligible tables, synced bidirectionally), blue "source-
+     only" (genericIdBasedTables()' autoincrement-keyed/no-updated_at
+     tables, synced one way FROM whichever peer has "Source node" on), or
+     grey "none" - so an admin can see both what's syncing and how, at a
+     glance. The table below repeats the same per-table facts in a form
+     that doesn't need a hover to read. -->
 <div class="row row-cards mt-4">
     <div class="col-12 col-xl-4">
         <div class="card h-100">
@@ -35,11 +37,15 @@
                         'no'            => lang('App.prodNo'),
                         'unknown'       => lang('App.prodUnknown'),
                         'noTables'      => lang('App.prodNoTables'),
+                        'modeMerge'      => lang('App.prodSyncModeMerge'),
+                        'modeSourceOnly' => lang('App.prodSyncModeSourceOnly'),
+                        'modeNone'       => lang('App.prodSyncModeNone'),
                     ]), 'attr') ?>"
                 ></div>
                 <div class="d-flex flex-wrap gap-3 justify-content-center mt-2 text-secondary" style="font-size:.75rem;">
-                    <span><span class="legend-dot" style="background:#2fb344"></span> <?= lang('App.prodSyncEligible') ?></span>
-                    <span><span class="legend-dot" style="background:#adb5bd"></span> <?= lang('App.prodNotEligible') ?></span>
+                    <span><span class="legend-dot" style="background:#2fb344"></span> <?= lang('App.prodSyncModeMerge') ?></span>
+                    <span><span class="legend-dot" style="background:#4299e1"></span> <?= lang('App.prodSyncModeSourceOnly') ?></span>
+                    <span><span class="legend-dot" style="background:#adb5bd"></span> <?= lang('App.prodSyncModeNone') ?></span>
                 </div>
                 <?php if ($productionInfo['tables'] === []) : ?>
                     <div class="text-secondary text-center mt-2" style="font-size:.75rem;"><?= lang('App.prodNoTables') ?></div>
@@ -63,7 +69,14 @@
                                         <td class="text-end"><?= esc($row['sizeHuman'] ?? lang('App.prodUnknown')) ?></td>
                                         <td class="text-center"><?= $row['hasAutoIncrementKey'] ? '<span class="text-danger">'.esc(lang('App.prodYes')).'</span>' : '<span class="text-secondary">'.esc(lang('App.prodNo')).'</span>' ?></td>
                                         <td class="text-center"><?= $row['hasUpdatedAt'] ? '<span class="text-success">'.esc(lang('App.prodYes')).'</span>' : '<span class="text-secondary">'.esc(lang('App.prodNo')).'</span>' ?></td>
-                                        <td class="text-center"><?= $row['syncEligible'] ? '<span class="badge bg-green-lt">'.esc(lang('App.prodYes')).'</span>' : '<span class="badge bg-secondary-lt">'.esc(lang('App.prodNo')).'</span>' ?></td>
+                                        <td class="text-center"><?php
+                                            $modeBadge = [
+                                                'merge'       => ['bg-green-lt', 'App.prodSyncModeMerge'],
+                                                'source-only' => ['bg-blue-lt', 'App.prodSyncModeSourceOnly'],
+                                                'none'        => ['bg-secondary-lt', 'App.prodSyncModeNone'],
+                                            ][$row['syncMode'] ?? 'none'];
+                                            echo '<span class="badge ' . $modeBadge[0] . '">' . esc(lang($modeBadge[1])) . '</span>';
+                                        ?></td>
                                     </tr>
                                 <?php endforeach ?>
                             </tbody>

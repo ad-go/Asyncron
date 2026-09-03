@@ -585,6 +585,84 @@ class DbSyncSchema
     }
 
     /**
+     * @var array<string, string>|null per-process cache, same reasoning
+     *                                  as $genericTablesCache above
+     */
+    private static ?array $genericIdBasedTablesCache = null;
+
+    private static ?string $genericIdBasedTablesCacheGroup = null;
+
+    /**
+     * genericTables()'s own counterpart for the tables it deliberately
+     * excludes - an autoincrement-keyed table, or one with no
+     * `updated_at` column, same single-column-primary-key requirement
+     * but neither of the other two. Built for this project's own real
+     * production schema (customers/pallets/po/po_products/products/
+     * zones - every one autoincrement-keyed, none of them ever synced by
+     * genericTables() at all) - see productionSourceNodeEnabled()'s own
+     * docblock for why an autoincrement id can be trusted as a
+     * correlation key ONLY one-directionally, from a designated Source
+     * node outward, never merged bidirectionally the way genericTables()'
+     * natural-key tables are: two independently-writing nodes could each
+     * generate id=5 for a completely different row, but a MIRROR that
+     * only ever receives from the one Source node has no independent id
+     * generation to collide with - its own id=5 is guaranteed to BE the
+     * source's id=5, because it was seeded from it (Commands\
+     * ImportProductionCommand's own clone, or this table's own first
+     * incremental push).
+     *
+     * Never merged with genericTables()' own return value - callers that
+     * need "every syncable table" check both explicitly (see
+     * Commands\SyncDbCommand's own outgoing loop for id-based tables,
+     * gated additionally on productionSourceNodeEnabled(), and
+     * Controllers\DbSyncController's block-hash endpoints, which serve
+     * either kind identically since the wire format doesn't distinguish
+     * them - only WHO is allowed to push does).
+     *
+     * @return array<string, string> table => primary-key column
+     */
+    public static function genericIdBasedTables(): array
+    {
+        $group = trim(config('Cluster')->dbSyncGroup);
+        if ($group === '') {
+            return [];
+        }
+
+        if (self::$genericIdBasedTablesCache !== null && self::$genericIdBasedTablesCacheGroup === $group) {
+            return self::$genericIdBasedTablesCache;
+        }
+
+        $exclude  = array_merge(self::HARD_EXCLUDED_TABLES, config('Cluster')->dbExcludeTables);
+        $eligible = self::genericTables();
+
+        $tables = [];
+        try {
+            $db = db_connect($group);
+            foreach ($db->listTables() as $tableName) {
+                if (in_array($tableName, $exclude, true) || array_key_exists($tableName, $eligible)) {
+                    continue;
+                }
+
+                $info = self::inspectTableKey($db, $tableName);
+                if ($info['keyColumn'] === null) {
+                    continue; // still need SOME single-column primary key to correlate rows by
+                }
+
+                $tables[$tableName] = $info['keyColumn'];
+            }
+        } catch (\Throwable $e) {
+            error_log("DbSyncSchema::genericIdBasedTables(): could not connect to/inspect group '$group' - $e");
+
+            return [];
+        }
+
+        self::$genericIdBasedTablesCache      = $tables;
+        self::$genericIdBasedTablesCacheGroup = $group;
+
+        return $tables;
+    }
+
+    /**
      * @return string|null the table's primary-key column name, or null
      *                      (logged) if it doesn't meet $dbSyncGroup's
      *                      requirements - see genericTables()'s own
@@ -668,7 +746,7 @@ class DbSyncSchema
      * Dashboard::productionInfo()'s own docblock for why it's gated on
      * productionSyncEnabled() rather than always shown.
      *
-     * @return array{database: string, sizeBytes: int|null, tables: array<string, array{records: int, sizeBytes: int|null, hasAutoIncrementKey: bool, hasUpdatedAt: bool, syncEligible: bool}>}|null
+     * @return array{database: string, sizeBytes: int|null, tables: array<string, array{records: int, sizeBytes: int|null, hasAutoIncrementKey: bool, hasUpdatedAt: bool, syncEligible: bool, syncMode: string}>}|null
      */
     public static function productionDatabaseInfo(): ?array
     {
@@ -677,10 +755,11 @@ class DbSyncSchema
             return null;
         }
 
-        $eligible  = self::genericTables();
-        $tables    = [];
-        $totalSize = 0;
-        $sizeKnown = true;
+        $eligible     = self::genericTables();
+        $eligibleById = self::genericIdBasedTables();
+        $tables       = [];
+        $totalSize    = 0;
+        $sizeKnown    = true;
 
         try {
             // db_connect() itself is lazy - MySQLi doesn't actually dial
@@ -728,12 +807,23 @@ class DbSyncSchema
                 $totalSize += $sizeBytes;
             }
 
+            // 'merge' - genericTables()' own natural-key/updated_at
+            // eligible tables, synced bidirectionally like users/settings.
+            // 'source-only' - genericIdBasedTables()' autoincrement-keyed
+            // or no-updated_at tables, synced ONE way, only from whichever
+            // peer has "Source node" turned on (see that setting's own
+            // docblock). 'none' - neither.
+            $syncMode = array_key_exists($table, $eligible)
+                ? 'merge'
+                : (array_key_exists($table, $eligibleById) ? 'source-only' : 'none');
+
             $tables[$table] = [
                 'records'             => $records,
                 'sizeBytes'           => $sizeBytes,
                 'hasAutoIncrementKey' => $keyInfo['keyColumn'] !== null && $keyInfo['keyIsInteger'],
                 'hasUpdatedAt'        => $keyInfo['hasUpdatedAt'],
-                'syncEligible'        => array_key_exists($table, $eligible),
+                'syncEligible'        => $syncMode !== 'none',
+                'syncMode'            => $syncMode,
             ];
         }
 
@@ -1002,8 +1092,8 @@ class DbSyncSchema
         } elseif ($table === 'settings') {
             [$class, $key, $context] = array_pad(explode(':', $naturalKey, 3), 3, '');
             $snapshot = self::exportSetting($db, $class, $key, $context);
-        } elseif (array_key_exists($table, self::genericTables())) {
-            $snapshot = self::exportGenericRow($db, $table, self::genericTables()[$table], $naturalKey);
+        } elseif (($keyColumn = self::genericTables()[$table] ?? self::genericIdBasedTables()[$table] ?? null) !== null) {
+            $snapshot = self::exportGenericRow($db, $table, $keyColumn, $naturalKey);
         } else {
             return null;
         }
@@ -1052,8 +1142,7 @@ class DbSyncSchema
                 }
                 $perBlock[self::blockIndexForKey($key)][$key] = self::hashSettingSnapshot($snapshot);
             }
-        } elseif (array_key_exists($table, self::genericTables())) {
-            $keyColumn = self::genericTables()[$table];
+        } elseif (($keyColumn = self::genericTables()[$table] ?? self::genericIdBasedTables()[$table] ?? null) !== null) {
             foreach (self::exportAllGenericKeys($db, $table, $keyColumn) as $keyValue) {
                 $snapshot = self::exportGenericRow($db, $table, $keyColumn, $keyValue);
                 if ($snapshot === null) {
@@ -1103,12 +1192,18 @@ class DbSyncSchema
         if ($table === 'settings' && ! self::settingsSyncEnabled()) {
             return ['applied' => false, 'reason' => 'settings sync disabled locally'];
         }
-        // Same choke point, for $dbSyncGroup's generic tables - see
-        // productionSyncEnabled()'s own docblock. Checked against the real
-        // discovered table list (not just "isn't users/settings") so an
-        // actually-unknown table still falls through to the normal
+        // Same choke point, for $dbSyncGroup's generic tables (both
+        // kinds - genericTables()' own merge-eligible ones and
+        // genericIdBasedTables()' source-only ones alike, same single
+        // productionSyncEnabled() switch gates receiving either) - see
+        // productionSyncEnabled()'s own docblock. Checked against the
+        // real discovered table lists (not just "isn't users/settings")
+        // so an actually-unknown table still falls through to the normal
         // 'unknown table' rejection below instead of a misleading reason.
-        if (array_key_exists($table, self::genericTables()) && ! self::productionSyncEnabled()) {
+        $generic       = self::genericTables();
+        $genericById   = self::genericIdBasedTables();
+        $isGenericTable = array_key_exists($table, $generic) || array_key_exists($table, $genericById);
+        if ($isGenericTable && ! self::productionSyncEnabled()) {
             return ['applied' => false, 'reason' => 'production sync disabled locally'];
         }
 
@@ -1119,10 +1214,9 @@ class DbSyncSchema
             return ['applied' => false, 'reason' => 'stale'];
         }
 
-        $generic = self::genericTables();
         if ($table === 'users') {
             $hash = self::hashUserSnapshot($payload);
-        } elseif ($table === 'settings' || array_key_exists($table, $generic)) {
+        } elseif ($table === 'settings' || $isGenericTable) {
             $hash = self::hashSettingSnapshot($payload);
         } else {
             return ['applied' => false, 'reason' => 'unknown table'];

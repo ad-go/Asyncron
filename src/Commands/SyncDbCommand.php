@@ -124,24 +124,20 @@ class SyncDbCommand extends BaseCommand
         // not just the enqueue, for the same "don't pay for the scan while
         // turned off" reasoning.
         if (DbSyncSchema::productionSyncEnabled()) {
-            foreach (DbSyncSchema::genericTables() as $table => $keyColumn) {
-                foreach (DbSyncSchema::exportAllGenericKeys($db, $table, $keyColumn) as $keyValue) {
-                    $snapshot = DbSyncSchema::exportGenericRow($db, $table, $keyColumn, $keyValue);
-                    if ($snapshot === null) {
-                        continue;
-                    }
-                    $hash  = DbSyncSchema::hashSettingSnapshot($snapshot);
-                    $key   = $keyValue;
-                    $known = $manifest->get("$table:$key");
-                    if ($known !== null && $known['hash'] === $hash) {
-                        continue;
-                    }
+            $changed += $this->scanAndEnqueueGenericTables($config, $peers, $manifest, $db, DbSyncSchema::genericTables());
 
-                    $timestamp = $this->rowTimestamp($snapshot['updated_at'] ?? null);
-                    $manifest->record("$table:$key", ['hash' => $hash, 'timestamp' => $timestamp]);
-                    $this->enqueueToEveryPeer($config, $peers, $table, $key, $snapshot, $timestamp);
-                    $changed++;
-                }
+            // genericIdBasedTables() (autoincrement-keyed or no-updated_at
+            // tables) can only ever be pushed FROM the designated Source
+            // node - see DbSyncSchema::genericIdBasedTables()' own
+            // docblock for why an autoincrement id is only a safe
+            // correlation key one-directionally. A non-source node still
+            // RECEIVES these fine (DbSyncSchema::applyIncomingCommand()
+            // applies them the same as any other generic table) - it just
+            // never scans/pushes its own copy of them back out, so there's
+            // no reverse flow for a mirror's own local drift to overwrite
+            // the source with.
+            if (DbSyncSchema::productionSourceNodeEnabled()) {
+                $changed += $this->scanAndEnqueueGenericTables($config, $peers, $manifest, $db, DbSyncSchema::genericIdBasedTables());
             }
         }
 
@@ -150,6 +146,43 @@ class SyncDbCommand extends BaseCommand
         if (array_key_exists('bootstrap', $params) || CLI::getOption('bootstrap')) {
             $this->bootstrap($cluster, $peers, $db);
         }
+    }
+
+    /**
+     * Shared scan-and-diff body for BOTH DbSyncSchema::genericTables() and
+     * ::genericIdBasedTables() - identical export/hash/manifest/enqueue
+     * logic either way, only WHICH table map (and, at the call site
+     * above, an extra productionSourceNodeEnabled() gate) differs between
+     * them.
+     *
+     * @param array<string, array{baseURL: string, type: string}> $peers
+     * @param array<string, string>                                $tables table => primary-key column
+     */
+    private function scanAndEnqueueGenericTables(ClusterConfig $config, array $peers, DbManifest $manifest, ConnectionInterface $db, array $tables): int
+    {
+        $changed = 0;
+
+        foreach ($tables as $table => $keyColumn) {
+            foreach (DbSyncSchema::exportAllGenericKeys($db, $table, $keyColumn) as $keyValue) {
+                $snapshot = DbSyncSchema::exportGenericRow($db, $table, $keyColumn, $keyValue);
+                if ($snapshot === null) {
+                    continue;
+                }
+                $hash  = DbSyncSchema::hashSettingSnapshot($snapshot);
+                $key   = $keyValue;
+                $known = $manifest->get("$table:$key");
+                if ($known !== null && $known['hash'] === $hash) {
+                    continue;
+                }
+
+                $timestamp = $this->rowTimestamp($snapshot['updated_at'] ?? null);
+                $manifest->record("$table:$key", ['hash' => $hash, 'timestamp' => $timestamp]);
+                $this->enqueueToEveryPeer($config, $peers, $table, $key, $snapshot, $timestamp);
+                $changed++;
+            }
+        }
+
+        return $changed;
     }
 
     /**
@@ -209,7 +242,14 @@ class SyncDbCommand extends BaseCommand
         $manifest = new DbManifest();
         $fetched  = 0;
 
-        $tables = array_merge(['users', 'settings'], array_keys(DbSyncSchema::genericTables()));
+        // genericIdBasedTables() included here too - bootstrap's own
+        // block-hash compare/pull is a REQUEST this node makes (unlike
+        // the outgoing scan above, which is a genuine push this node
+        // initiates), so pulling one of these tables is safe regardless
+        // of this node's own Source-node status: it's just asking a peer
+        // "what do you have", never asserting its own copy is
+        // authoritative.
+        $tables = array_merge(['users', 'settings'], array_keys(DbSyncSchema::genericTables()), array_keys(DbSyncSchema::genericIdBasedTables()));
 
         foreach ($peers as $peerName => $node) {
             $client = $cluster->peerClient($node['baseURL'], 20);
