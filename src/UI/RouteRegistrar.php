@@ -389,20 +389,78 @@ class RouteRegistrar
         // changed" for these tables instead of enqueueing a push for
         // every one of potentially tens of thousands of already-
         // identical rows.
+        // Time-boxed loop over SyncDbCommand::primeManifestChunk() - see
+        // that method's own docblock for why chunking is required at all
+        // on a host like h1q (a hard ~30s request_terminate_timeout no
+        // in-script PHP directive can override). Processes chunks until
+        // ~22s have elapsed (comfortable margin under that external
+        // kill, found live 2026-09-04 to consistently land right at
+        // 30.0-30.1s) OR every table reports done, whichever comes
+        // first; call again with the returned '?table=&offset=' to
+        // resume exactly where it left off. Usage: start with no
+        // params (defaults to the first source-only table at offset 0),
+        // keep re-calling with the JSON response's own 'resume' value
+        // until 'done' is true.
         $routes->get('fix-prime-production-manifest', static function () {
             if ($denied = self::requireSuperadmin()) {
                 return $denied;
             }
-            if (! class_exists(\AdGo\Cluster\Commands\SyncDbCommand::class)) {
+            if (! class_exists(\AdGo\Cluster\Commands\SyncDbCommand::class) || ! class_exists(\AdGo\Cluster\DbSyncSchema::class)) {
                 return service('response')->setStatusCode(503)->setBody('ad-go/cluster is not installed.');
             }
 
-            set_time_limit(0);
-            ignore_user_abort(true);
+            $tables = array_keys(\AdGo\Cluster\DbSyncSchema::genericIdBasedTables());
+            if ($tables === []) {
+                return service('response')->setStatusCode(200)->setJSON(['done' => true, 'message' => 'No source-only tables to prime.']);
+            }
 
-            $count = (new \AdGo\Cluster\Commands\SyncDbCommand(service('logger'), service('commands')))->primeManifest();
+            $table  = (string) service('request')->getGet('table');
+            $offset = max(0, (int) service('request')->getGet('offset'));
+            if ($table === '' || ! in_array($table, $tables, true)) {
+                $table  = $tables[0];
+                $offset = 0;
+            }
 
-            return service('response')->setStatusCode(200)->setBody("Primed manifest for $count row(s) - the next cluster:sync-db tick will see them as already up to date.\n");
+            $command   = new \AdGo\Cluster\Commands\SyncDbCommand(service('logger'), service('commands'));
+            $deadline  = microtime(true) + 22;
+            $chunkSize = 2000;
+            $primed    = 0;
+            $results   = [];
+
+            while (microtime(true) < $deadline) {
+                $chunk = $command->primeManifestChunk($table, $offset, $chunkSize);
+                if (isset($chunk['error'])) {
+                    return service('response')->setStatusCode(422)->setJSON($chunk);
+                }
+
+                $primed += $chunk['primed'];
+                $results[] = $table . ': ' . ($offset + $chunk['primed']) . '/' . $chunk['total'];
+
+                if ($chunk['nextOffset'] !== null) {
+                    $offset = $chunk['nextOffset'];
+
+                    continue;
+                }
+
+                // This table is done - move to the next one, or finish.
+                $tableIndex = array_search($table, $tables, true);
+                if ($tableIndex === count($tables) - 1) {
+                    return service('response')->setStatusCode(200)->setJSON([
+                        'done'    => true,
+                        'primedThisCall' => $primed,
+                        'progress' => $results,
+                    ]);
+                }
+                $table  = $tables[$tableIndex + 1];
+                $offset = 0;
+            }
+
+            return service('response')->setStatusCode(200)->setJSON([
+                'done'    => false,
+                'primedThisCall' => $primed,
+                'progress' => $results,
+                'resume'  => ['table' => $table, 'offset' => $offset],
+            ]);
         }, ['filter' => 'session']);
 
         // Read-only companion to fix-retry-failed-queue above - that route

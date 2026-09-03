@@ -167,7 +167,14 @@ class SyncDbCommand extends BaseCommand
      * on whichever LATER tick first notices it changed again.
      *
      * Web trigger: RouteRegistrar's own fix-prime-production-manifest
-     * route.
+     * route - which calls primeManifestChunk() below in a time-boxed
+     * loop instead of this all-at-once version, since h1q's own php-fpm
+     * pool enforces a hard ~30s request_terminate_timeout that NEITHER
+     * set_time_limit(0) NOR ignore_user_abort(true) can override (that
+     * one kills the WORKER PROCESS externally, not the script itself) -
+     * found live 2026-09-04, this method alone never got to finish a
+     * ~97,000-row scan there. CLI callers (`php spark cluster:sync-db`
+     * has no such external limit) can still use this one-shot version.
      */
     public function primeManifest(): int
     {
@@ -176,6 +183,48 @@ class SyncDbCommand extends BaseCommand
         $db       = db_connect('default');
 
         return $this->scanAndEnqueueGenericTables($config, [], $manifest, $db, DbSyncSchema::genericIdBasedTables(), true);
+    }
+
+    /**
+     * Chunked counterpart to primeManifest() above, for a host that kills
+     * long-running requests externally - see that method's own docblock.
+     * Re-fetches the table's own full key list on every call (a single
+     * cheap SELECT of just the key column, not full rows) and slices it
+     * by $offset/$limit; the caller loops this across tables and offsets
+     * until every 'nextOffset' comes back null.
+     *
+     * @return array{table: string, primed: int, total: int, nextOffset: int|null}|array{error: string}
+     */
+    public function primeManifestChunk(string $table, int $offset, int $limit): array
+    {
+        $tables = DbSyncSchema::genericIdBasedTables();
+        if (! array_key_exists($table, $tables)) {
+            return ['error' => "'$table' is not a source-only (genericIdBasedTables) table."];
+        }
+        $keyColumn = $tables[$table];
+
+        $config   = config('Cluster');
+        $manifest = new DbManifest($config);
+        $db       = db_connect('default');
+
+        $allKeys = DbSyncSchema::exportAllGenericKeys($db, $table, $keyColumn);
+        $slice   = array_slice($allKeys, $offset, $limit);
+
+        $primed = 0;
+        foreach ($slice as $keyValue) {
+            $snapshot = DbSyncSchema::exportGenericRow($db, $table, $keyColumn, $keyValue);
+            if ($snapshot === null) {
+                continue;
+            }
+            $hash      = DbSyncSchema::hashSettingSnapshot($snapshot);
+            $timestamp = $this->rowTimestamp($snapshot['updated_at'] ?? null);
+            $manifest->record("$table:$keyValue", ['hash' => $hash, 'timestamp' => $timestamp]);
+            $primed++;
+        }
+
+        $nextOffset = ($offset + $limit) < count($allKeys) ? $offset + $limit : null;
+
+        return ['table' => $table, 'primed' => $primed, 'total' => count($allKeys), 'nextOffset' => $nextOffset];
     }
 
     /**
