@@ -568,6 +568,41 @@ class DbSyncSchema
      */
     private static function discoverNaturalKey(ConnectionInterface $db, string $table): ?string
     {
+        $info = self::inspectTableKey($db, $table);
+
+        if ($info['keyColumn'] === null) {
+            error_log("DbSyncSchema: skipping table '$table' - no single-column primary key (dbSyncGroup requires exactly one).");
+
+            return null;
+        }
+
+        if ($info['keyIsInteger']) {
+            error_log("DbSyncSchema: skipping table '$table' - primary key '{$info['keyColumn']}' is an integer type ({$info['keyType']}), almost certainly a node-local autoincrement id, not a portable natural key.");
+
+            return null;
+        }
+
+        if (! $info['hasUpdatedAt']) {
+            error_log("DbSyncSchema: skipping table '$table' - no `updated_at` column (dbSyncGroup requires one for Last-Write-Wins, same as every other synced table).");
+
+            return null;
+        }
+
+        return $info['keyColumn'];
+    }
+
+    /**
+     * One getIndexData()/getFieldData() scan per table, shared by
+     * discoverNaturalKey() above (which only cares whether the result
+     * passes ALL three checks) and Dashboard::productionInfo() below
+     * (which wants each flag individually, for every table - not just the
+     * ones that qualify - so an admin can see WHY a table isn't syncing,
+     * not just that it isn't).
+     *
+     * @return array{keyColumn: string|null, keyType: string, keyIsInteger: bool, hasUpdatedAt: bool}
+     */
+    private static function inspectTableKey(ConnectionInterface $db, string $table): array
+    {
         $indexes = $db->getIndexData($table);
         $primary = null;
         foreach ($indexes as $index) {
@@ -576,43 +611,102 @@ class DbSyncSchema
                 break;
             }
         }
+        $keyColumn = ($primary !== null && count($primary->fields ?? []) === 1) ? $primary->fields[0] : null;
 
-        if ($primary === null || count($primary->fields ?? []) !== 1) {
-            error_log("DbSyncSchema: skipping table '$table' - no single-column primary key (dbSyncGroup requires exactly one).");
-
-            return null;
-        }
-        $keyColumn = $primary->fields[0];
-
-        $fields        = $db->getFieldData($table);
-        $keyField      = null;
-        $hasUpdatedAt  = false;
+        $fields       = $db->getFieldData($table);
+        $keyType      = '';
+        $hasUpdatedAt = false;
         foreach ($fields as $field) {
-            if (($field->name ?? '') === $keyColumn) {
-                $keyField = $field;
+            if ($keyColumn !== null && ($field->name ?? '') === $keyColumn) {
+                $keyType = strtolower((string) ($field->type ?? ''));
             }
             if (($field->name ?? '') === 'updated_at') {
                 $hasUpdatedAt = true;
             }
         }
 
-        $integerTypes = ['int', 'bigint', 'mediumint', 'smallint', 'tinyint'];
-        $keyType      = strtolower((string) ($keyField->type ?? ''));
-        foreach ($integerTypes as $intType) {
+        $keyIsInteger = false;
+        foreach (['int', 'bigint', 'mediumint', 'smallint', 'tinyint'] as $intType) {
             if (str_contains($keyType, $intType)) {
-                error_log("DbSyncSchema: skipping table '$table' - primary key '$keyColumn' is an integer type ($keyType), almost certainly a node-local autoincrement id, not a portable natural key.");
-
-                return null;
+                $keyIsInteger = true;
+                break;
             }
         }
 
-        if (! $hasUpdatedAt) {
-            error_log("DbSyncSchema: skipping table '$table' - no `updated_at` column (dbSyncGroup requires one for Last-Write-Wins, same as every other synced table).");
+        return ['keyColumn' => $keyColumn, 'keyType' => $keyType, 'keyIsInteger' => $keyIsInteger, 'hasUpdatedAt' => $hasUpdatedAt];
+    }
 
+    /**
+     * Read-only inventory of Config\Cluster::$dbSyncGroup's real database -
+     * EVERY table (not just genericTables()' sync-eligible subset), each
+     * with enough detail for an admin to see both what's syncing and why
+     * anything isn't. Feeds the Dashboard's own "Production" card - see
+     * Dashboard::productionInfo()'s own docblock for why it's gated on
+     * productionSyncEnabled() rather than always shown.
+     *
+     * @return array{database: string, sizeBytes: int|null, tables: array<string, array{records: int, sizeBytes: int|null, hasAutoIncrementKey: bool, hasUpdatedAt: bool, syncEligible: bool}>}|null
+     */
+    public static function productionDatabaseInfo(): ?array
+    {
+        $group = trim(config('Cluster')->dbSyncGroup);
+        if ($group === '') {
             return null;
         }
 
-        return $keyColumn;
+        try {
+            $db       = db_connect($group);
+            $database = $db->getDatabase();
+        } catch (\Throwable $e) {
+            return null;
+        }
+
+        $eligible  = self::genericTables();
+        $tables    = [];
+        $totalSize = 0;
+        $sizeKnown = true;
+
+        foreach ($db->listTables() as $table) {
+            try {
+                $records = (int) $db->table($table)->countAllResults();
+            } catch (\Throwable $e) {
+                continue; // an unreadable/system table - skip rather than fail the whole inventory
+            }
+
+            try {
+                $keyInfo = self::inspectTableKey($db, $table);
+            } catch (\Throwable $e) {
+                $keyInfo = ['keyColumn' => null, 'keyType' => '', 'keyIsInteger' => false, 'hasUpdatedAt' => false];
+            }
+
+            $sizeBytes = null;
+            if ($db->DBDriver === 'MySQLi') {
+                try {
+                    $row = $db->query(
+                        'SELECT (data_length + index_length) AS sz FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ?',
+                        [$table]
+                    )->getRowArray();
+                    $sizeBytes = $row !== null ? (int) $row['sz'] : null;
+                } catch (\Throwable $e) {
+                    $sizeKnown = false;
+                }
+            } else {
+                $sizeKnown = false; // best-effort - only MySQL's information_schema is wired up here
+            }
+
+            if ($sizeBytes !== null) {
+                $totalSize += $sizeBytes;
+            }
+
+            $tables[$table] = [
+                'records'             => $records,
+                'sizeBytes'           => $sizeBytes,
+                'hasAutoIncrementKey' => $keyInfo['keyColumn'] !== null && $keyInfo['keyIsInteger'],
+                'hasUpdatedAt'        => $keyInfo['hasUpdatedAt'],
+                'syncEligible'        => array_key_exists($table, $eligible),
+            ];
+        }
+
+        return ['database' => $database, 'sizeBytes' => $sizeKnown ? $totalSize : null, 'tables' => $tables];
     }
 
     /**

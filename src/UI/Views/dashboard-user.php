@@ -52,4 +52,10 @@
 <?php else : ?>
 <div class="alert alert-secondary"><?= lang('App.netNotInstalled') ?></div>
 <?php endif ?>
+
+<?php if ($productionInfo !== null) : ?>
+<?= $this->include('\AdGo\Cluster\UI\Views\partials\production-card') ?>
+<script src="<?= base_url('assets/echarts/echarts.min.js') ?>" defer></script>
+<script src="<?= base_url('assets/dashboard-production.js') ?>" defer></script>
+<?php endif ?>
 <?= $this->endSection() ?>

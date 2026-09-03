@@ -38,6 +38,11 @@ class Dashboard extends BaseController
             // 2026-08-19: a regular user saw "ad-go/cluster is not
             // installed on this node", which was simply false).
             'clusterInstalled' => class_exists(\AdGo\Cluster\Cluster::class),
+            // NOT gated on $isSuperadmin, unlike every card above - shown
+            // to both dashboards on request, since production-sync
+            // visibility isn't an admin-only cluster-topology concern the
+            // way the rest of this page is.
+            'productionInfo' => $this->productionInfo(),
         ] + $this->layoutData());
     }
 
@@ -171,6 +176,47 @@ class Dashboard extends BaseController
         }
 
         return ['tables' => $tables, 'sizeSupported' => $stats['sizeSupported'], 'nodeStats' => $nodeStats];
+    }
+
+    // Feeds the Dashboard's own "Production" card, appended after the
+    // Network/Database/Nodes row - shown on BOTH the superadmin and
+    // 'user' group dashboards (unlike every other card here, which stays
+    // superadmin-only) since production-sync visibility isn't an admin-
+    // only cluster-topology concern the way the rest of this page is.
+    // Gated on DbSyncSchema::productionSyncEnabled() rather than always
+    // rendered - that flag defaults OFF (opt-in), so most nodes simply
+    // don't have a real business database wired into Config\Cluster::
+    // $dbSyncGroup at all, and a card showing an empty/errored inventory
+    // by default would be more confusing than useful. null (card hidden
+    // entirely) covers "not installed", "sync disabled", "no dbSyncGroup
+    // configured", and "can't connect" alike - see
+    // DbSyncSchema::productionDatabaseInfo()'s own docblock for why those
+    // last two collapse to the same null rather than surfacing a
+    // separate error state here.
+    private function productionInfo(): ?array
+    {
+        if (! class_exists(\AdGo\Cluster\DbSyncSchema::class) || ! \AdGo\Cluster\DbSyncSchema::productionSyncEnabled()) {
+            return null;
+        }
+
+        $info = \AdGo\Cluster\DbSyncSchema::productionDatabaseInfo();
+        if ($info === null) {
+            return null;
+        }
+
+        $tables = [];
+        foreach ($info['tables'] as $name => $row) {
+            $tables[$name] = $row + [
+                'sizeHuman' => $row['sizeBytes'] !== null ? $this->humanSize($row['sizeBytes']) : null,
+            ];
+        }
+
+        return [
+            'database'  => $info['database'],
+            'sizeBytes' => $info['sizeBytes'],
+            'sizeHuman' => $info['sizeBytes'] !== null ? $this->humanSize($info['sizeBytes']) : null,
+            'tables'    => $tables,
+        ];
     }
 
     // README "Not built yet" gap #1: Cluster::preserveConflictLoser() has

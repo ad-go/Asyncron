@@ -241,6 +241,10 @@
     </div>
 </div>
 
+<?php if ($productionInfo !== null) : ?>
+<?= $this->include('\AdGo\Cluster\UI\Views\partials\production-card') ?>
+<?php endif ?>
+
 <?php if ($conflicts !== null) : ?>
 <!-- README "Not built yet" gap #1, closed 2026-08-22: a Dashboard viewer
      for Cluster::preserveConflictLoser()'s own archive+log (the data
@@ -334,6 +338,9 @@
 <script src="<?= base_url('assets/dashboard-node-tree.js') ?>" defer></script>
 <?php if ($tableInfo !== null && $tableInfo['tables'] !== []) : ?>
 <script src="<?= base_url('assets/dashboard-tables.js') ?>" defer></script>
+<?php endif ?>
+<?php if ($productionInfo !== null) : ?>
+<script src="<?= base_url('assets/dashboard-production.js') ?>" defer></script>
 <?php endif ?>
 <?php endif ?>
 <?php if ($conflicts !== null && $conflicts !== []) : ?>
