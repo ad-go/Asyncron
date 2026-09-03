@@ -347,6 +347,42 @@ class RouteRegistrar
             return service('response')->setStatusCode(200)->setJSON($entries);
         }, ['filter' => 'session']);
 
+        // Read-only inventory of THIS node's real Config\Cluster::
+        // $dbSyncGroup database (whatever real name it points at -
+        // 'production' on h1q, 'rofulfillment_b' on beta, 'D10beta' on
+        // upz) - every table and its row count, not just the subset
+        // genericTables() would consider sync-eligible. Built 2026-09-03
+        // to show the actual blast radius before a destructive cleanup
+        // decision, never to be used to act on its own.
+        $routes->get('fix-list-production-tables', static function () {
+            if ($denied = self::requireSuperadmin()) {
+                return $denied;
+            }
+
+            $group = trim((string) config('Cluster')->dbSyncGroup);
+            if ($group === '') {
+                return service('response')->setStatusCode(200)->setJSON(['group' => '', 'tables' => []]);
+            }
+
+            try {
+                $db = db_connect($group);
+                $database = $db->getDatabase();
+                $tables = [];
+                foreach ($db->listTables() as $table) {
+                    try {
+                        $count = $db->table($table)->countAllResults();
+                    } catch (\Throwable $e) {
+                        $count = null;
+                    }
+                    $tables[] = ['table' => $table, 'rows' => $count];
+                }
+            } catch (\Throwable $e) {
+                return service('response')->setStatusCode(200)->setJSON(['group' => $group, 'error' => $e->getMessage(), 'tables' => []]);
+            }
+
+            return service('response')->setStatusCode(200)->setJSON(['group' => $group, 'database' => $database, 'tables' => $tables]);
+        }, ['filter' => 'session']);
+
         $routes->get('server-list.json', static function () {
             return service('response')
                 ->setStatusCode(200)
