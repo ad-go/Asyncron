@@ -381,6 +381,30 @@ class RouteRegistrar
             return service('response')->setStatusCode(200)->setBody(implode("\n", $lines) . "\n");
         }, ['filter' => 'session']);
 
+        // Web trigger for SyncDbCommand::primeManifest() - see that
+        // method's own docblock for why this matters: run once on a
+        // Source node right after data landed there via fix-import-
+        // production (or any other means) on every mirror, BEFORE the
+        // next scheduled cluster:sync-db tick, so that tick sees "nothing
+        // changed" for these tables instead of enqueueing a push for
+        // every one of potentially tens of thousands of already-
+        // identical rows.
+        $routes->get('fix-prime-production-manifest', static function () {
+            if ($denied = self::requireSuperadmin()) {
+                return $denied;
+            }
+            if (! class_exists(\AdGo\Cluster\Commands\SyncDbCommand::class)) {
+                return service('response')->setStatusCode(503)->setBody('ad-go/cluster is not installed.');
+            }
+
+            set_time_limit(0);
+            ignore_user_abort(true);
+
+            $count = (new \AdGo\Cluster\Commands\SyncDbCommand(service('logger'), service('commands')))->primeManifest();
+
+            return service('response')->setStatusCode(200)->setBody("Primed manifest for $count row(s) - the next cluster:sync-db tick will see them as already up to date.\n");
+        }, ['filter' => 'session']);
+
         // Read-only companion to fix-retry-failed-queue above - that route
         // says HOW MANY jobs failed, never WHY, and there's no admin UI or
         // shell access here to read queue_jobs_failed's own 'exceptions'

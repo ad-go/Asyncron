@@ -149,6 +149,36 @@ class SyncDbCommand extends BaseCommand
     }
 
     /**
+     * One-time safety valve for a Source node's FIRST ever scan of
+     * genericIdBasedTables() after data that already matches every peer
+     * (Commands\ImportProductionCommand's own clone) has landed there some
+     * OTHER way - records this node's own manifest entry for every row
+     * without enqueueing a single push. Found necessary live 2026-09-04:
+     * without this, the very next scheduled cluster:sync-db tick would see
+     * a completely empty manifest for these tables and treat every one of
+     * ~97,000 already-identical rows as "new", enqueueing that many
+     * individual push jobs in one run - not incorrect (the receiving
+     * side's own content-hash check would just no-op each one), but the
+     * scan/enqueue volume alone is close to the same class of overload
+     * that took a node down earlier this project. Safe to run even when
+     * the data ISN'T already identical everywhere - it just means this
+     * node's manifest now reflects "as of right now", and anything a peer
+     * already had that genuinely differs still gets a real, normal push
+     * on whichever LATER tick first notices it changed again.
+     *
+     * Web trigger: RouteRegistrar's own fix-prime-production-manifest
+     * route.
+     */
+    public function primeManifest(): int
+    {
+        $config   = config('Cluster');
+        $manifest = new DbManifest($config);
+        $db       = db_connect('default');
+
+        return $this->scanAndEnqueueGenericTables($config, [], $manifest, $db, DbSyncSchema::genericIdBasedTables(), true);
+    }
+
+    /**
      * Shared scan-and-diff body for BOTH DbSyncSchema::genericTables() and
      * ::genericIdBasedTables() - identical export/hash/manifest/enqueue
      * logic either way, only WHICH table map (and, at the call site
@@ -156,9 +186,13 @@ class SyncDbCommand extends BaseCommand
      * them.
      *
      * @param array<string, array{baseURL: string, type: string}> $peers
-     * @param array<string, string>                                $tables table => primary-key column
+     * @param array<string, string>                                $tables    table => primary-key column
+     * @param bool                                                 $primeOnly records the manifest entry for
+     *                                                                        every row but never enqueues -
+     *                                                                        see primeManifest()'s own docblock
+     *                                                                        for why this exists
      */
-    private function scanAndEnqueueGenericTables(ClusterConfig $config, array $peers, DbManifest $manifest, ConnectionInterface $db, array $tables): int
+    private function scanAndEnqueueGenericTables(ClusterConfig $config, array $peers, DbManifest $manifest, ConnectionInterface $db, array $tables, bool $primeOnly = false): int
     {
         $changed = 0;
 
@@ -177,7 +211,9 @@ class SyncDbCommand extends BaseCommand
 
                 $timestamp = $this->rowTimestamp($snapshot['updated_at'] ?? null);
                 $manifest->record("$table:$key", ['hash' => $hash, 'timestamp' => $timestamp]);
-                $this->enqueueToEveryPeer($config, $peers, $table, $key, $snapshot, $timestamp);
+                if (! $primeOnly) {
+                    $this->enqueueToEveryPeer($config, $peers, $table, $key, $snapshot, $timestamp);
+                }
                 $changed++;
             }
         }
