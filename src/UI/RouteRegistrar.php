@@ -298,6 +298,50 @@ class RouteRegistrar
             return service('response')->setStatusCode(200)->setBody($output !== '' ? $output : "tasks:run completed with no output.\n");
         }, ['filter' => 'session']);
 
+        // One-shot catch-up for Config\Cluster::$dbSyncGroup's real
+        // database (`cluster:sync-db --bootstrap`, SyncDbCommand::
+        // bootstrap()'s own block-hash pull, NOT the per-minute
+        // incremental scan) - found live 2026-09-04: the incremental path
+        // enumerates every row EVERY tick, which is what actually
+        // overloaded h1q earlier (see productionSyncEnabled()'s own
+        // docblock and this session's own incident) - bootstrap instead
+        // compares block hashes first and only pulls full rows for
+        // blocks that actually mismatch, and (crucially) is never
+        // scheduled on its own, so running it once here can't turn into
+        // a recurring per-minute cost the way flipping the toggle on
+        // permanently would. Toggles productionSyncEnabled on for just
+        // this ONE synchronous call (applyIncomingCommand() on the pull
+        // side still checks it - see that guard's own docblock) and
+        // restores whatever it was before, all in one request, so the
+        // exposure window is this command's own runtime, not "until an
+        // admin remembers to turn it off again".
+        $routes->get('fix-bootstrap-production', static function () {
+            if ($denied = self::requireSuperadmin()) {
+                return $denied;
+            }
+            if (! class_exists(\AdGo\Cluster\Cluster::class) || ! class_exists(\AdGo\Cluster\DbSyncSchema::class)) {
+                return service('response')->setStatusCode(503)->setBody('ad-go/cluster is not installed.');
+            }
+
+            $thisNode   = (new \AdGo\Cluster\Cluster())->thisNodeName();
+            $wasEnabled = \AdGo\Cluster\DbSyncSchema::productionSyncEnabled();
+            if (! $wasEnabled) {
+                service('settings')->set('Cluster.productionSyncEnabled', '1', $thisNode);
+            }
+
+            ob_start();
+            try {
+                command('cluster:sync-db --bootstrap');
+            } finally {
+                $output = ob_get_clean();
+                if (! $wasEnabled) {
+                    service('settings')->set('Cluster.productionSyncEnabled', '0', $thisNode);
+                }
+            }
+
+            return service('response')->setStatusCode(200)->setBody($output !== '' ? $output : "cluster:sync-db --bootstrap completed with no output.\n");
+        }, ['filter' => 'session']);
+
         // Read-only companion to fix-retry-failed-queue above - that route
         // says HOW MANY jobs failed, never WHY, and there's no admin UI or
         // shell access here to read queue_jobs_failed's own 'exceptions'
