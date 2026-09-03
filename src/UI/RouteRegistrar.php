@@ -409,7 +409,10 @@ class RouteRegistrar
                 return service('response')->setStatusCode(503)->setBody('ad-go/cluster is not installed.');
             }
 
-            $tables = array_keys(\AdGo\Cluster\DbSyncSchema::genericIdBasedTables());
+            $tables = array_merge(
+                array_keys(\AdGo\Cluster\DbSyncSchema::genericIdBasedTables()),
+                array_keys(\AdGo\Cluster\DbSyncSchema::genericCompositeKeyTables())
+            );
             if ($tables === []) {
                 return service('response')->setStatusCode(200)->setJSON(['done' => true, 'message' => 'No source-only tables to prime.']);
             }

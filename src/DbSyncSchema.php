@@ -663,6 +663,144 @@ class DbSyncSchema
     }
 
     /**
+     * @var array<string, list<string>>|null per-process cache, same
+     *                                        reasoning as $genericTablesCache
+     */
+    private static ?array $genericCompositeKeyTablesCache = null;
+
+    private static ?string $genericCompositeKeyTablesCacheGroup = null;
+
+    /**
+     * genericIdBasedTables()' own counterpart for tables neither it nor
+     * genericTables() can key AT ALL - a multi-column (composite) primary
+     * key, e.g. a junction/line-item table like `po_lines` keyed on
+     * (po_id, line_no) with no single-column id of its own. "sync ANY
+     * table" (this project's own request for it) still stops here, not at
+     * a table with NO primary key whatsoever - correlating the "same" row
+     * across two nodes requires SOME candidate key, and inventing one from
+     * full-row content would silently misidentify any row after ANY
+     * column changed as a brand-new one instead of an update. That's a
+     * real, deliberate limitation, not an oversight - see
+     * encodeCompositeKey()'s own docblock for how the columns THIS method
+     * does find get folded into the one string every other natural-key
+     * table here already uses.
+     *
+     * Same one-directional, Source-node-only trust as genericIdBasedTables()
+     * - whether any of a composite key's own columns happen to be portable
+     * (a real business code) or not (an autoincrement FK to another
+     * node-local table) isn't distinguished here, so this is exactly as
+     * conservative as the worse of the two cases would require anyway.
+     *
+     * @return array<string, list<string>> table => ordered list of primary-key columns
+     */
+    public static function genericCompositeKeyTables(): array
+    {
+        $group = trim(config('Cluster')->dbSyncGroup);
+        if ($group === '') {
+            return [];
+        }
+
+        if (self::$genericCompositeKeyTablesCache !== null && self::$genericCompositeKeyTablesCacheGroup === $group) {
+            return self::$genericCompositeKeyTablesCache;
+        }
+
+        $exclude    = array_merge(self::HARD_EXCLUDED_TABLES, config('Cluster')->dbExcludeTables);
+        $singleKeys = array_merge(self::genericTables(), self::genericIdBasedTables());
+
+        $tables = [];
+        try {
+            $db = db_connect($group);
+            foreach ($db->listTables() as $tableName) {
+                if (in_array($tableName, $exclude, true) || array_key_exists($tableName, $singleKeys)) {
+                    continue;
+                }
+
+                $info = self::inspectTableKey($db, $tableName);
+                if (count($info['keyColumns']) < 2) {
+                    continue; // no PK at all, or a single-column one already covered above
+                }
+
+                $tables[$tableName] = $info['keyColumns'];
+            }
+        } catch (\Throwable $e) {
+            error_log("DbSyncSchema::genericCompositeKeyTables(): could not connect to/inspect group '$group' - $e");
+
+            return [];
+        }
+
+        self::$genericCompositeKeyTablesCache      = $tables;
+        self::$genericCompositeKeyTablesCacheGroup = $group;
+
+        return $tables;
+    }
+
+    // Not ':' (this class's own 'settings' natural key already uses that,
+    // e.g. "class:key:context") - a real column VALUE containing a colon
+    // (a URL, a timestamp) would silently corrupt the split on decode.
+    // \x1F (ASCII "unit separator") is control-character space no normal
+    // business data ever legitimately contains.
+    private const COMPOSITE_KEY_SEPARATOR = "\x1F";
+
+    /**
+     * @param list<string> $values one value per genericCompositeKeyTables()
+     *                             column, in that same order
+     */
+    private static function encodeCompositeKey(array $values): string
+    {
+        return implode(self::COMPOSITE_KEY_SEPARATOR, $values);
+    }
+
+    /**
+     * @return list<string>
+     */
+    private static function decodeCompositeKey(string $key): array
+    {
+        return explode(self::COMPOSITE_KEY_SEPARATOR, $key);
+    }
+
+    /**
+     * genericCompositeKeyTables()' own counterpart to exportAllGenericKeys()
+     * - one encoded (see encodeCompositeKey()) key per row instead of a
+     * single column's raw value.
+     *
+     * @param list<string> $keyColumns
+     *
+     * @return list<string> encoded composite keys
+     */
+    public static function exportAllCompositeKeys(ConnectionInterface $db, string $table, array $keyColumns): array
+    {
+        $rows = self::genericDb()->table($table)->select(implode(',', $keyColumns))->get()->getResultArray();
+
+        return array_values(array_unique(array_map(
+            static fn (array $row): string => self::encodeCompositeKey(array_map(
+                static fn (string $col): string => (string) $row[$col],
+                $keyColumns
+            )),
+            $rows
+        )));
+    }
+
+    /**
+     * genericCompositeKeyTables()' own counterpart to exportGenericRow().
+     *
+     * @param list<string> $keyColumns
+     */
+    public static function exportCompositeRow(ConnectionInterface $db, string $table, array $keyColumns, string $encodedKey): ?array
+    {
+        $values = self::decodeCompositeKey($encodedKey);
+        if (count($values) !== count($keyColumns)) {
+            return null; // malformed key - column count changed since this key was encoded, or a corrupt wire value
+        }
+
+        $builder = self::genericDb()->table($table);
+        foreach ($keyColumns as $i => $column) {
+            $builder->where($column, $values[$i]);
+        }
+
+        return $builder->get()->getRowArray();
+    }
+
+    /**
      * @return string|null the table's primary-key column name, or null
      *                      (logged) if it doesn't meet $dbSyncGroup's
      *                      requirements - see genericTables()'s own
@@ -713,7 +851,12 @@ class DbSyncSchema
                 break;
             }
         }
-        $keyColumn = ($primary !== null && count($primary->fields ?? []) === 1) ? $primary->fields[0] : null;
+        // Every PK column, single or composite - genericCompositeKeyTables()
+        // below is the only current reader of this one; every existing
+        // caller still only ever reads keyColumn (single-column only, null
+        // otherwise), unchanged.
+        $keyColumns = $primary !== null ? array_values($primary->fields ?? []) : [];
+        $keyColumn  = count($keyColumns) === 1 ? $keyColumns[0] : null;
 
         $fields       = $db->getFieldData($table);
         $keyType      = '';
@@ -735,7 +878,7 @@ class DbSyncSchema
             }
         }
 
-        return ['keyColumn' => $keyColumn, 'keyType' => $keyType, 'keyIsInteger' => $keyIsInteger, 'hasUpdatedAt' => $hasUpdatedAt];
+        return ['keyColumn' => $keyColumn, 'keyColumns' => $keyColumns, 'keyType' => $keyType, 'keyIsInteger' => $keyIsInteger, 'hasUpdatedAt' => $hasUpdatedAt];
     }
 
     /**
@@ -755,8 +898,9 @@ class DbSyncSchema
             return null;
         }
 
-        $eligible     = self::genericTables();
-        $eligibleById = self::genericIdBasedTables();
+        $eligible          = self::genericTables();
+        $eligibleById      = self::genericIdBasedTables();
+        $eligibleComposite = self::genericCompositeKeyTables();
         $tables       = [];
         $totalSize    = 0;
         $sizeKnown    = true;
@@ -810,12 +954,13 @@ class DbSyncSchema
             // 'merge' - genericTables()' own natural-key/updated_at
             // eligible tables, synced bidirectionally like users/settings.
             // 'source-only' - genericIdBasedTables()' autoincrement-keyed
-            // or no-updated_at tables, synced ONE way, only from whichever
+            // or no-updated_at tables, AND genericCompositeKeyTables()'
+            // multi-column-PK tables, synced ONE way, only from whichever
             // peer has "Source node" turned on (see that setting's own
             // docblock). 'none' - neither.
             $syncMode = array_key_exists($table, $eligible)
                 ? 'merge'
-                : (array_key_exists($table, $eligibleById) ? 'source-only' : 'none');
+                : ((array_key_exists($table, $eligibleById) || array_key_exists($table, $eligibleComposite)) ? 'source-only' : 'none');
 
             $tables[$table] = [
                 'records'             => $records,
@@ -955,11 +1100,18 @@ class DbSyncSchema
             return null;
         }
         // The physical id (if this table has a plain autoincrement PK
-        // alongside its own real natural key) is node-local, same
-        // reasoning as every other table here - never portable, and
+        // ALONGSIDE its own real natural key - genericTables()' own
+        // eligibility requires a non-integer key, so 'id' is never that
+        // column there) is node-local, never portable, and
         // applyGenericSnapshot() below always upserts by $keyColumn, never
-        // by it.
-        unset($row['id']);
+        // by it - strip it. Found live 2026-09-04: unconditional here was
+        // a real bug for genericIdBasedTables()' own tables, where 'id' IS
+        // $keyColumn - stripping it left every exported snapshot missing
+        // the one value applyGenericSnapshot() needs to know WHICH row to
+        // write, silently no-op'ing every single row on the receiving end.
+        if ($keyColumn !== 'id') {
+            unset($row['id']);
+        }
 
         return $row;
     }
@@ -986,6 +1138,38 @@ class DbSyncSchema
             // applyUserSnapshot()/applySettingSnapshot() already follow).
             unset($data['created_at']);
             $db->table($table)->where($keyColumn, $keyValue)->update($data);
+        } else {
+            $db->table($table)->insert($data);
+        }
+        $queryLog[] = $db->showLastQuery();
+    }
+
+    /**
+     * genericCompositeKeyTables()' own counterpart to applyGenericSnapshot()
+     * above - identical upsert logic, just a WHERE built from every column
+     * in $keyColumns instead of one.
+     *
+     * @param list<string> $keyColumns
+     * @param list<string> $queryLog
+     */
+    public static function applyCompositeSnapshot(ConnectionInterface $db, string $table, array $keyColumns, array $snapshot, array &$queryLog = []): void
+    {
+        $db = self::genericDb();
+
+        $where = [];
+        foreach ($keyColumns as $column) {
+            if (! array_key_exists($column, $snapshot)) {
+                return; // incomplete snapshot - can't safely identify a row without every key column present
+            }
+            $where[$column] = $snapshot[$column];
+        }
+
+        $existing = $db->table($table)->where($where)->get()->getRowArray();
+
+        $data = $snapshot;
+        if ($existing !== null) {
+            unset($data['created_at']);
+            $db->table($table)->where($where)->update($data);
         } else {
             $db->table($table)->insert($data);
         }
@@ -1094,6 +1278,8 @@ class DbSyncSchema
             $snapshot = self::exportSetting($db, $class, $key, $context);
         } elseif (($keyColumn = self::genericTables()[$table] ?? self::genericIdBasedTables()[$table] ?? null) !== null) {
             $snapshot = self::exportGenericRow($db, $table, $keyColumn, $naturalKey);
+        } elseif (($keyColumns = self::genericCompositeKeyTables()[$table] ?? null) !== null) {
+            $snapshot = self::exportCompositeRow($db, $table, $keyColumns, $naturalKey);
         } else {
             return null;
         }
@@ -1150,6 +1336,14 @@ class DbSyncSchema
                 }
                 $perBlock[self::blockIndexForKey($keyValue)][$keyValue] = self::hashSettingSnapshot($snapshot);
             }
+        } elseif (($keyColumns = self::genericCompositeKeyTables()[$table] ?? null) !== null) {
+            foreach (self::exportAllCompositeKeys($db, $table, $keyColumns) as $keyValue) {
+                $snapshot = self::exportCompositeRow($db, $table, $keyColumns, $keyValue);
+                if ($snapshot === null) {
+                    continue;
+                }
+                $perBlock[self::blockIndexForKey($keyValue)][$keyValue] = self::hashSettingSnapshot($snapshot);
+            }
         }
 
         return $perBlock;
@@ -1200,9 +1394,10 @@ class DbSyncSchema
         // real discovered table lists (not just "isn't users/settings")
         // so an actually-unknown table still falls through to the normal
         // 'unknown table' rejection below instead of a misleading reason.
-        $generic       = self::genericTables();
-        $genericById   = self::genericIdBasedTables();
-        $isGenericTable = array_key_exists($table, $generic) || array_key_exists($table, $genericById);
+        $generic          = self::genericTables();
+        $genericById      = self::genericIdBasedTables();
+        $genericComposite = self::genericCompositeKeyTables();
+        $isGenericTable = array_key_exists($table, $generic) || array_key_exists($table, $genericById) || array_key_exists($table, $genericComposite);
         if ($isGenericTable && ! self::productionSyncEnabled()) {
             return ['applied' => false, 'reason' => 'production sync disabled locally'];
         }
@@ -1247,8 +1442,12 @@ class DbSyncSchema
                 self::applyUserSnapshot($db, $payload, $queryLog);
             } elseif ($table === 'settings') {
                 self::applySettingSnapshot($db, $payload, $queryLog);
-            } else {
+            } elseif (array_key_exists($table, $genericComposite)) {
+                self::applyCompositeSnapshot($db, $table, $genericComposite[$table], $payload, $queryLog);
+            } elseif (array_key_exists($table, $generic)) {
                 self::applyGenericSnapshot($db, $table, $generic[$table], $payload, $queryLog);
+            } else {
+                self::applyGenericSnapshot($db, $table, $genericById[$table], $payload, $queryLog);
             }
         } catch (\Throwable $e) {
             (new DbSyncLog())->record([

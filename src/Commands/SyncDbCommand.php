@@ -138,6 +138,15 @@ class SyncDbCommand extends BaseCommand
             // the source with.
             if (DbSyncSchema::productionSourceNodeEnabled()) {
                 $changed += $this->scanAndEnqueueGenericTables($config, $peers, $manifest, $db, DbSyncSchema::genericIdBasedTables());
+
+                // genericCompositeKeyTables() (multi-column primary key
+                // tables) - same one-directional Source-node-only reasoning
+                // as genericIdBasedTables() just above: a composite key is
+                // still an internal correlation key, not a natural key two
+                // independent mirrors could safely merge against each
+                // other, so only the Source node's own copy is ever
+                // scanned/pushed out here.
+                $changed += $this->scanAndEnqueueCompositeTables($config, $peers, $manifest, $db, DbSyncSchema::genericCompositeKeyTables());
             }
         }
 
@@ -182,7 +191,22 @@ class SyncDbCommand extends BaseCommand
         $manifest = new DbManifest($config);
         $db       = db_connect('default');
 
-        return $this->scanAndEnqueueGenericTables($config, [], $manifest, $db, DbSyncSchema::genericIdBasedTables(), true);
+        $primed = $this->scanAndEnqueueGenericTables($config, [], $manifest, $db, DbSyncSchema::genericIdBasedTables(), true);
+
+        foreach (DbSyncSchema::genericCompositeKeyTables() as $table => $keyColumns) {
+            foreach (DbSyncSchema::exportAllCompositeKeys($db, $table, $keyColumns) as $keyValue) {
+                $snapshot = DbSyncSchema::exportCompositeRow($db, $table, $keyColumns, $keyValue);
+                if ($snapshot === null) {
+                    continue;
+                }
+                $hash      = DbSyncSchema::hashSettingSnapshot($snapshot);
+                $timestamp = $this->rowTimestamp($snapshot['updated_at'] ?? null);
+                $manifest->record("$table:$keyValue", ['hash' => $hash, 'timestamp' => $timestamp]);
+                $primed++;
+            }
+        }
+
+        return $primed;
     }
 
     /**
@@ -193,26 +217,40 @@ class SyncDbCommand extends BaseCommand
      * by $offset/$limit; the caller loops this across tables and offsets
      * until every 'nextOffset' comes back null.
      *
+     * Covers BOTH genericIdBasedTables() (single-column key) and
+     * genericCompositeKeyTables() (multi-column key) - same source-only,
+     * potentially-huge-first-scan risk either way, so the same chunking
+     * safety valve applies to both.
+     *
      * @return array{table: string, primed: int, total: int, nextOffset: int|null}|array{error: string}
      */
     public function primeManifestChunk(string $table, int $offset, int $limit): array
     {
-        $tables = DbSyncSchema::genericIdBasedTables();
-        if (! array_key_exists($table, $tables)) {
-            return ['error' => "'$table' is not a source-only (genericIdBasedTables) table."];
+        $byId      = DbSyncSchema::genericIdBasedTables();
+        $composite = DbSyncSchema::genericCompositeKeyTables();
+        if (! array_key_exists($table, $byId) && ! array_key_exists($table, $composite)) {
+            return ['error' => "'$table' is not a source-only (genericIdBasedTables/genericCompositeKeyTables) table."];
         }
-        $keyColumn = $tables[$table];
+        $isComposite = array_key_exists($table, $composite);
 
         $config   = config('Cluster');
         $manifest = new DbManifest($config);
         $db       = db_connect('default');
 
-        $allKeys = DbSyncSchema::exportAllGenericKeys($db, $table, $keyColumn);
-        $slice   = array_slice($allKeys, $offset, $limit);
+        if ($isComposite) {
+            $keyColumns = $composite[$table];
+            $allKeys    = DbSyncSchema::exportAllCompositeKeys($db, $table, $keyColumns);
+        } else {
+            $keyColumn = $byId[$table];
+            $allKeys   = DbSyncSchema::exportAllGenericKeys($db, $table, $keyColumn);
+        }
+        $slice = array_slice($allKeys, $offset, $limit);
 
         $primed = 0;
         foreach ($slice as $keyValue) {
-            $snapshot = DbSyncSchema::exportGenericRow($db, $table, $keyColumn, $keyValue);
+            $snapshot = $isComposite
+                ? DbSyncSchema::exportCompositeRow($db, $table, $keyColumns, $keyValue)
+                : DbSyncSchema::exportGenericRow($db, $table, $keyColumn, $keyValue);
             if ($snapshot === null) {
                 continue;
             }
@@ -263,6 +301,44 @@ class SyncDbCommand extends BaseCommand
                 if (! $primeOnly) {
                     $this->enqueueToEveryPeer($config, $peers, $table, $key, $snapshot, $timestamp);
                 }
+                $changed++;
+            }
+        }
+
+        return $changed;
+    }
+
+    /**
+     * Composite-primary-key counterpart to scanAndEnqueueGenericTables()
+     * above - identical scan/diff/enqueue shape, just against
+     * DbSyncSchema::exportAllCompositeKeys()/exportCompositeRow() (a
+     * $keyColumns array per table instead of one $keyColumn string), for
+     * DbSyncSchema::genericCompositeKeyTables()'s own multi-column-PK
+     * tables. Kept as its own method rather than folded into the
+     * single-column one above since the two export/hash calls take a
+     * genuinely different shape of key argument.
+     *
+     * @param array<string, list<string>> $tables table => primary-key columns
+     */
+    private function scanAndEnqueueCompositeTables(ClusterConfig $config, array $peers, DbManifest $manifest, ConnectionInterface $db, array $tables): int
+    {
+        $changed = 0;
+
+        foreach ($tables as $table => $keyColumns) {
+            foreach (DbSyncSchema::exportAllCompositeKeys($db, $table, $keyColumns) as $keyValue) {
+                $snapshot = DbSyncSchema::exportCompositeRow($db, $table, $keyColumns, $keyValue);
+                if ($snapshot === null) {
+                    continue;
+                }
+                $hash  = DbSyncSchema::hashSettingSnapshot($snapshot);
+                $known = $manifest->get("$table:$keyValue");
+                if ($known !== null && $known['hash'] === $hash) {
+                    continue;
+                }
+
+                $timestamp = $this->rowTimestamp($snapshot['updated_at'] ?? null);
+                $manifest->record("$table:$keyValue", ['hash' => $hash, 'timestamp' => $timestamp]);
+                $this->enqueueToEveryPeer($config, $peers, $table, $keyValue, $snapshot, $timestamp);
                 $changed++;
             }
         }
@@ -334,7 +410,7 @@ class SyncDbCommand extends BaseCommand
         // of this node's own Source-node status: it's just asking a peer
         // "what do you have", never asserting its own copy is
         // authoritative.
-        $tables = array_merge(['users', 'settings'], array_keys(DbSyncSchema::genericTables()), array_keys(DbSyncSchema::genericIdBasedTables()));
+        $tables = array_merge(['users', 'settings'], array_keys(DbSyncSchema::genericTables()), array_keys(DbSyncSchema::genericIdBasedTables()), array_keys(DbSyncSchema::genericCompositeKeyTables()));
 
         foreach ($peers as $peerName => $node) {
             $client = $cluster->peerClient($node['baseURL'], 20);
