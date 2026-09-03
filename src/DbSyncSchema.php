@@ -653,19 +653,26 @@ class DbSyncSchema
             return null;
         }
 
-        try {
-            $db       = db_connect($group);
-            $database = $db->getDatabase();
-        } catch (\Throwable $e) {
-            return null;
-        }
-
         $eligible  = self::genericTables();
         $tables    = [];
         $totalSize = 0;
         $sizeKnown = true;
 
-        foreach ($db->listTables() as $table) {
+        try {
+            // db_connect() itself is lazy - MySQLi doesn't actually dial
+            // out until the first real call, so bad credentials (found
+            // live 2026-09-04 on upz: D10usr access denied) surface at
+            // getDatabase()/listTables() below, not at db_connect() -
+            // both need to be inside this same try, not just the query
+            // loop's own per-table guards further down.
+            $db       = db_connect($group);
+            $database = $db->getDatabase();
+            $tableList = $db->listTables();
+        } catch (\Throwable $e) {
+            return null;
+        }
+
+        foreach ($tableList as $table) {
             try {
                 $records = (int) $db->table($table)->countAllResults();
             } catch (\Throwable $e) {
