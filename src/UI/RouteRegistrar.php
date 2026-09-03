@@ -371,7 +371,16 @@ class RouteRegistrar
             ignore_user_abort(true);
 
             ob_start();
-            command('cluster:import-production --from=' . $from);
+            // Space, not '=' - found live 2026-09-04: command()'s own
+            // tokenizer (see its own docblock, ported from Symfony's
+            // StringInput) has no '--opt=value' handling at all, only
+            // '--opt value' as two separate tokens; '--from=node1' was
+            // silently parsed as ONE param literally named 'from=node1'
+            // with a null value, so CLI::getOption('from') always came
+            // back empty and the command exited on its own first guard -
+            // instantly, silently (CLI::write() output goes nowhere here
+            // either), looking indistinguishable from a real no-op.
+            command('cluster:import-production --from ' . $from);
             $output = ob_get_clean();
 
             return service('response')->setStatusCode(200)->setBody($output !== '' ? $output : "cluster:import-production completed - check fix-list-production-tables to confirm what landed.\n");
