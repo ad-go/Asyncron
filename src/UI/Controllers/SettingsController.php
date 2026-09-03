@@ -68,6 +68,16 @@ class SettingsController extends BaseController
         return null;
     }
 
+    // Shared by every method below that reads the cluster registry - 11
+    // identical copies of this exact "optional package" guard before this
+    // extraction (found live 2026-09-03). Empty array when ad-go/cluster
+    // isn't installed at all, same "nothing configured yet" fallback every
+    // one of those call sites already used.
+    private function knownNodes(): array
+    {
+        return class_exists(\AdGo\Cluster\Cluster::class) ? (new \AdGo\Cluster\Cluster())->allNodes() : [];
+    }
+
     // Per-node Databases table, same swap-on-select shape as Nodes' FTP/SSH
     // credential families above, generalized to FIVE independent sets
     // instead of two - one per CI4-supported driver, not just the driver
@@ -398,7 +408,7 @@ class SettingsController extends BaseController
      */
     private function nodeRows(): array
     {
-        $registry = class_exists(\AdGo\Cluster\Cluster::class) ? (new \AdGo\Cluster\Cluster())->allNodes() : [];
+        $registry = $this->knownNodes();
         $settings = service('settings');
 
         $rows = [];
@@ -445,7 +455,7 @@ class SettingsController extends BaseController
      */
     private function databaseRows(): array
     {
-        $registry = class_exists(\AdGo\Cluster\Cluster::class) ? (new \AdGo\Cluster\Cluster())->allNodes() : [];
+        $registry = $this->knownNodes();
         $settings = service('settings');
 
         $rows = [];
@@ -499,7 +509,7 @@ class SettingsController extends BaseController
         $prop  = (string) $this->request->getPost('prop');
         $value = (string) $this->request->getPost('value');
 
-        $known = class_exists(\AdGo\Cluster\Cluster::class) ? (new \AdGo\Cluster\Cluster())->allNodes() : [];
+        $known = $this->knownNodes();
         if (! array_key_exists($node, $known) || ! in_array($prop, self::DATABASE_PROPS, true)) {
             return $this->response->setStatusCode(422)->setJSON(['ok' => false]);
         }
@@ -525,7 +535,7 @@ class SettingsController extends BaseController
         $prop  = (string) $this->request->getPost('prop');
         $value = (string) $this->request->getPost('value');
 
-        $known = class_exists(\AdGo\Cluster\Cluster::class) ? (new \AdGo\Cluster\Cluster())->allNodes() : [];
+        $known = $this->knownNodes();
         if (! array_key_exists($node, $known) || ! in_array($prop, self::NODE_PROPS, true)) {
             return $this->response->setStatusCode(422)->setJSON(['ok' => false]);
         }
@@ -562,7 +572,7 @@ class SettingsController extends BaseController
         }
 
         $node  = (string) $this->request->getPost('node');
-        $known = class_exists(\AdGo\Cluster\Cluster::class) ? (new \AdGo\Cluster\Cluster())->allNodes() : [];
+        $known = $this->knownNodes();
         if (! array_key_exists($node, $known)) {
             return $this->response->setStatusCode(422)->setJSON(['ok' => false, 'error' => 'Unknown node.']);
         }
@@ -635,7 +645,7 @@ class SettingsController extends BaseController
     // admin clears every field back out.
     private function syncOwnDatabaseEnv(string $node): void
     {
-        $known = class_exists(\AdGo\Cluster\Cluster::class) ? (new \AdGo\Cluster\Cluster())->allNodes() : [];
+        $known = $this->knownNodes();
         if ($this->matchOwnNodeName($known) !== $node) {
             return;
         }
@@ -1182,7 +1192,7 @@ class SettingsController extends BaseController
             return $this->response->setStatusCode(422)->setJSON(['ok' => false, 'error' => 'Invalid file - expected {"nodes": {"<name>": {...,"database":{...}}}}.']);
         }
 
-        $known = class_exists(\AdGo\Cluster\Cluster::class) ? (new \AdGo\Cluster\Cluster())->allNodes() : [];
+        $known = $this->knownNodes();
 
         // Splits each node's nested "database" object out into its own
         // flat map alongside the node's own connection props - the rest of
@@ -1278,7 +1288,7 @@ class SettingsController extends BaseController
             return $denied;
         }
 
-        $existing = class_exists(\AdGo\Cluster\Cluster::class) ? (new \AdGo\Cluster\Cluster())->allNodes() : [];
+        $existing = $this->knownNodes();
         if ($existing !== []) {
             return $this->response->setStatusCode(422)->setJSON(['ok' => false, 'error' => 'A cluster is already configured - edit .env directly to change it.']);
         }
@@ -1884,7 +1894,7 @@ class SettingsController extends BaseController
             return $this->response->setStatusCode(422)->setJSON(['ok' => false, 'error' => "Invalid protocol '{$protocol}'."]);
         }
 
-        $existing = class_exists(\AdGo\Cluster\Cluster::class) ? (new \AdGo\Cluster\Cluster())->allNodes() : [];
+        $existing = $this->knownNodes();
         if (array_key_exists($name, $existing)) {
             return $this->response->setStatusCode(422)->setJSON(['ok' => false, 'error' => "A node named '{$name}' already exists."]);
         }
@@ -1956,7 +1966,7 @@ class SettingsController extends BaseController
 
         $name = (string) $this->request->getPost('node');
 
-        $existing = class_exists(\AdGo\Cluster\Cluster::class) ? (new \AdGo\Cluster\Cluster())->allNodes() : [];
+        $existing = $this->knownNodes();
         if (! array_key_exists($name, $existing)) {
             return $this->response->setStatusCode(422)->setJSON(['ok' => false, 'error' => "Unknown node '{$name}'."]);
         }
@@ -2006,7 +2016,7 @@ class SettingsController extends BaseController
             return $denied;
         }
 
-        $existing = class_exists(\AdGo\Cluster\Cluster::class) ? (new \AdGo\Cluster\Cluster())->allNodes() : [];
+        $existing = $this->knownNodes();
 
         if (! \AdGo\Cluster\ClusterEnvWriter::writeLines([
             'cluster.nodes'             => '""',
