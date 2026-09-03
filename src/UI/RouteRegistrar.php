@@ -422,8 +422,16 @@ class RouteRegistrar
             }
 
             $command   = new \AdGo\Cluster\Commands\SyncDbCommand(service('logger'), service('commands'));
-            $deadline  = microtime(true) + 22;
-            $chunkSize = 2000;
+            // Found live 2026-09-04: even a single 2000-row chunk (one
+            // SELECT per row - see exportGenericRow()'s own docblock)
+            // took long enough on h1q alone to still blow through the
+            // external ~30s kill before the between-chunk deadline check
+            // ever got a chance to preempt it. A much smaller chunk and a
+            // shorter, more conservative budget trade more HTTP round
+            // trips (this route is meant to be called repeatedly anyway)
+            // for a hard ceiling on any ONE chunk's own worst case.
+            $deadline  = microtime(true) + 12;
+            $chunkSize = 300;
             $primed    = 0;
             $results   = [];
 
